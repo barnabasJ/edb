@@ -119,11 +119,11 @@ when
             timeout => timeout(),
             function := callback(Result)
         }.
-eval(Opts0 = #{context := _}) ->
+eval(Opts0 = #{context := {Pid, FrameId}}) ->
     #{function := #{function := Fun, deps := Deps}} = Opts0,
     Opts1 =
         Opts0#{
-            function := language_callback(Fun),
+            function := language_callback(Fun, edb_dap_language:frame_language(Pid, FrameId)),
             dependencies => [edb_dap_language_elixir | Deps],
             max_term_size => maps:get(max_term_size, Opts0, 1_000_000_000),
             timeout => maps:get(timeout, Opts0, 5_000)
@@ -703,13 +703,8 @@ structure({value, Val}, {ValAccessor, EvalName}) when is_function(Val) ->
 structure(_, {_ValAccessor, _EvalName}) ->
     none.
 
--spec language_callback(fun((A) -> B)) -> fun((A) -> B).
-language_callback(Fun) ->
-    Language =
-        case edb_dap_language:implementation() of
-            edb_dap_language_elixir -> elixir;
-            _ -> erlang
-        end,
+-spec language_callback(fun((A) -> B), erlang | elixir) -> fun((A) -> B).
+language_callback(Fun, Language) ->
     fun(Arg) ->
         put(edb_language, Language),
         Fun(Arg)
@@ -745,5 +740,5 @@ map_access_expression(Key, Expression) ->
 
 -spec global_language_callback(fun((map()) -> A)) -> fun(() -> A).
 global_language_callback(Fun) ->
-    Wrapped = language_callback(Fun),
+    Wrapped = language_callback(Fun, edb_dap_language:expression_language()),
     fun() -> Wrapped(#{}) end.

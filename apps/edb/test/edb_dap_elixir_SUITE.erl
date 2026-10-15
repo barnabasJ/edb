@@ -18,10 +18,18 @@
 -export([all/0, init_per_suite/1, end_per_suite/1, end_per_testcase/2]).
 -export([test_elixir_debug_session/1, test_variable_rebinding/1, test_mix_launch/1, test_mix_exunit_launch/1]).
 -export([test_pipeline_steps/1]).
+-export([test_mixed_frame_languages/1]).
 -include_lib("assert/include/assert.hrl").
 
 all() ->
-    [test_elixir_debug_session, test_variable_rebinding, test_mix_launch, test_mix_exunit_launch, test_pipeline_steps].
+    [
+        test_elixir_debug_session,
+        test_variable_rebinding,
+        test_mix_launch,
+        test_mix_exunit_launch,
+        test_pipeline_steps,
+        test_mixed_frame_languages
+    ].
 
 init_per_suite(Config) ->
     case {code:which('Elixir.Code'), code:which('Elixir.Mix.Tasks.Compile.Edb')} of
@@ -49,6 +57,86 @@ test_variable_rebinding(_) ->
     },
     ?assertEqual([{~"x", ~"_x@12", {value, 12}}], edb_dap_language_elixir:visible_variables(Vars)),
     ?assertEqual(13, edb_dap_language_elixir:evaluate(~"x + 1", #{vars => Vars})).
+
+test_mixed_frame_languages(Config) ->
+    PrivDir = proplists:get_value(priv_dir, Config),
+    Source = filename:join(PrivDir, "mixed.ex"),
+    ok = file:write_file(
+        Source,
+        ~"defmodule EdbMixedFixture do\n def go(value) do\n  result = :edb_mixed_bridge.go(value)\n  {result, value}\n end\nend\ndefmodule :edb_mixed_inner do\n def go(x) do\n  y = x + 1\n  send(self(), y)\n  y\n end\nend\n"
+    ),
+    lists:foreach(
+        fun({Module, Binary}) ->
+            Beam = filename:join(PrivDir, atom_to_list(Module) ++ ".beam"),
+            ok = file:write_file(Beam, Binary),
+            ok = 'Elixir.Mix.Tasks.Compile.Edb':instrument(list_to_binary(Beam))
+        end,
+        'Elixir.Code':compile_file(list_to_binary(Source))
+    ),
+    ErlangSource = filename:join(PrivDir, "edb_mixed_bridge.erl"),
+    ok = file:write_file(
+        ErlangSource,
+        ~"-module(edb_mixed_bridge).\n-export([go/1]).\ngo(Value) ->\n Payload = #{answer => [Value]},\n Result = edb_mixed_inner:go(Value),\n {Result, Value, Payload}.\n"
+    ),
+    {ok, edb_mixed_bridge} = compile:file(
+        ErlangSource,
+        [debug_info, beam_debug_info, beam_debug_stack, {outdir, PrivDir}]
+    ),
+    true = code:add_patha(PrivDir),
+    try
+        AdapterEnv = [{"ERL_AFLAGS", "-eval application:set_env(edb,dap_language,edb_dap_language_elixir)"}],
+        {ok, Client, #{peer := Peer}} = edb_dap_test_support:start_session_via_launch(
+            Config, #{}, #{copy_code_path => true}, AdapterEnv
+        ),
+        #{success := true, body := #{breakpoints := [#{verified := true}]}} =
+            edb_dap_test_client:set_breakpoints(Client, #{
+                source => #{path => list_to_binary(Source)}, breakpoints => [#{line => 10}]
+            }),
+        #{success := true} = edb_dap_test_client:configuration_done(Client),
+        {ok, _} = peer:call(Peer, application, ensure_all_started, [elixir]),
+        {ok, Thread, [#{id := Inner}, #{name := ~"edb_mixed_bridge:go/1"}, #{name := ~"EdbMixedFixture.go/1"} | _]} =
+            edb_dap_test_support:spawn_and_wait_for_bp(Client, Peer, {'Elixir.EdbMixedFixture', go, [2]}),
+        InnerVars = frame_locals(Client, Inner),
+        ?assertMatch(#{~"x" := #{value := ~"2"}, ~"y" := #{value := ~"3"}}, InnerVars),
+        ?assertEqual([~"x", ~"y"], lists:sort(maps:keys(InnerVars))),
+        ?assertMatch(
+            #{success := true, body := #{result := ~"5"}},
+            edb_dap_test_client:evaluate(Client, #{frameId => Inner, expression => ~"x + y"})
+        ),
+        #{success := true} = edb_dap_test_client:step_out(Client, #{threadId => Thread}),
+        {ok, Thread, [#{id := Erlang, name := ~"edb_mixed_bridge:go/1"} | _]} = wait_for_step(Client),
+        ErlangVars = frame_locals(Client, Erlang),
+        ?assertMatch(#{~"Value" := #{value := ~"2"}}, ErlangVars),
+        #{~"Payload" := #{value := ~"#{answer => [2]}", variablesReference := PayloadRef}} = ErlangVars,
+        #{~"answer" := #{evaluateName := AnswerExpr, value := ~"[2]"}} =
+            edb_dap_test_support:get_variables(Client, PayloadRef),
+        lists:foreach(
+            fun({Frame, Expr, Result}) ->
+                ?assertMatch(
+                    #{success := true, body := #{result := Result}},
+                    edb_dap_test_client:evaluate(Client, #{frameId => Frame, expression => Expr})
+                )
+            end,
+            [
+                {Erlang, ~"Value + 1", ~"3"},
+                {Erlang, AnswerExpr, ~"[2]"}
+            ]
+        ),
+        #{success := true} = edb_dap_test_client:step_out(Client, #{threadId => Thread}),
+        {ok, Thread, [#{id := Outer, name := ~"EdbMixedFixture.go/1"} | _]} = wait_for_step(Client),
+        ?assertMatch(#{~"value" := #{value := ~"2"}}, frame_locals(Client, Outer)),
+        ?assertMatch(
+            #{success := true, body := #{result := ~"3"}},
+            edb_dap_test_client:evaluate(Client, #{frameId => Outer, expression => ~"value + 1"})
+        ),
+        #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread})
+    after
+        code:del_path(PrivDir)
+    end.
+
+frame_locals(Client, Frame) ->
+    #{~"Locals" := #{variablesReference := Ref}} = edb_dap_test_support:get_scopes(Client, Frame),
+    edb_dap_test_support:get_variables(Client, Ref).
 
 test_pipeline_steps(Config) ->
     PrivDir = proplists:get_value(priv_dir, Config),

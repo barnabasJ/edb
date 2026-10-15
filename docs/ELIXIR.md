@@ -177,11 +177,14 @@ calls. Existing instrumented modules are upgraded on the next compilation.
 Guards, generated macro code, dynamic callees and calls sharing one source line
 retain their original compiler stepping behavior.
 
-Watch/REPL expressions use Elixir syntax and the selected frame's most recent
-variable bindings. Compiler-generated temporaries are hidden. Values use Elixir's
-`inspect` representation. Expressions run in a separate evaluator process, as in
-Erlang sessions; `self()` refers to that process. Lexical aliases, imports, module
-attributes and private functions from the original source scope are not restored;
+Watch/REPL expressions use the selected frame's source language: Elixir syntax
+and the most recent variable bindings for `.ex`/`.exs` frames, Erlang syntax and
+original variable names for `.erl` frames. Frames without source metadata and
+global expressions use the session language. Elixir compiler-generated temporaries
+are hidden, and Elixir values use `inspect`. Expressions run in a separate
+evaluator process, as in Erlang sessions; `self()` refers to that process.
+Lexical aliases, imports, module attributes and private functions from the
+original source scope are not restored;
 use fully qualified public calls. Exceptions and unsupported DAP capabilities have
 the same handling as Erlang sessions.
 

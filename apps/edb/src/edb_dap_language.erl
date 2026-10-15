@@ -27,6 +27,7 @@ Language-specific hooks for the DAP adapter.
 -export([start_link/0]).
 -export([source_to_modules/2, configure/1, implementation/0]).
 -export([format_mfa/1]).
+-export([frame_language/2, expression_language/0]).
 
 -export([
     init/1,
@@ -89,6 +90,34 @@ format_mfa({Module, Function, Arity}) ->
 -spec configure(erlang | elixir) -> ok.
 configure(Language) ->
     gen_server:call(?SERVER, {configure, Language}).
+
+%% A session can contain both Erlang and Elixir frames. Use source metadata
+%% rather than module names, since Elixir also permits atom-named modules.
+-spec frame_language(pid(), edb:frame_id()) -> erlang | elixir.
+frame_language(Pid, FrameId) ->
+    case edb:stack_frames(Pid) of
+        {ok, Frames} ->
+            case [Source || #{id := Id, source := Source} <- Frames, Id =:= FrameId] of
+                [Source] when is_list(Source); is_binary(Source) ->
+                    case filename:extension(unicode:characters_to_binary(Source)) of
+                        ~".erl" -> erlang;
+                        ~".ex" -> elixir;
+                        ~".exs" -> elixir;
+                        _ -> expression_language()
+                    end;
+                _ ->
+                    expression_language()
+            end;
+        not_paused ->
+            expression_language()
+    end.
+
+-spec expression_language() -> erlang | elixir.
+expression_language() ->
+    case implementation() of
+        edb_dap_language_elixir -> elixir;
+        _ -> erlang
+    end.
 
 -spec implementation() -> module().
 implementation() ->

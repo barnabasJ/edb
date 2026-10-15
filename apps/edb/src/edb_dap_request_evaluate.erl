@@ -153,27 +153,27 @@ parse_arguments(Args) ->
     State :: edb_dap_server:state(),
     Args :: arguments().
 handle(#{state := attached, client_info := ClientInfo}, Args = #{expression := Expr}) ->
-    {FrameId1, FreeVars, EvalContext} =
+    {FrameId1, FreeVars, EvalContext, Language} =
         case Args of
             #{frameId := FrameId} ->
                 {ok, #{pid := Pid, frame_no := FrameNo}} = edb_dap_id_mappings:frame_id_to_pid_frame(FrameId),
                 case edb:stack_frame_vars(Pid, FrameNo, 0) of
                     {ok, StackFrameVars} ->
                         Vars = maps:keys(maps:get(vars, StackFrameVars, #{})),
-                        {FrameId, Vars, #{context => {Pid, FrameNo}}};
+                        {FrameId, Vars, #{context => {Pid, FrameNo}}, edb_dap_language:frame_language(Pid, FrameNo)};
                     not_paused ->
                         throw({not_paused, Pid});
                     undefined ->
                         throw({failed_to_resolve_scope, #{pid => Pid, frame_no => FrameNo}})
                 end;
             _ ->
-                {none, [], #{}}
+                {none, [], #{}, edb_dap_language:expression_language()}
         end,
     maybe
         Line = maps:get(line, Args, 1),
         Col = maps:get(column, Args, 1),
         {ok, CompiledExpr} ?=
-            case compile_expression(Expr, #{free_vars => FreeVars, start_line => Line, start_col => Col}) of
+            case compile_expression(Expr, Language, #{free_vars => FreeVars, start_line => Line, start_col => Col}) of
                 {error, CompileErr} -> {compile_error, CompileErr};
                 CompileRes = {ok, _} -> CompileRes
             end,
@@ -237,9 +237,9 @@ maybe_add_pagination_info(#{supportsVariablePaging := true}, #{count := N}, Body
 maybe_add_pagination_info(_ClientInfo, _Structure, Body) ->
     Body.
 
--spec compile_expression(binary(), map()) -> dynamic().
-compile_expression(Expr, Opts) ->
-    case edb_dap_language:implementation() of
-        edb_dap_language_elixir -> {ok, #{language => elixir, expression => Expr}};
-        _ -> edb_expr:compile_expr(Expr, Opts)
+-spec compile_expression(binary(), erlang | elixir, map()) -> dynamic().
+compile_expression(Expr, Language, Opts) ->
+    case Language of
+        elixir -> {ok, #{language => elixir, expression => Expr}};
+        erlang -> edb_expr:compile_expr(Expr, Opts)
     end.
