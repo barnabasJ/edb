@@ -17,9 +17,11 @@
 -oncall("whatsapp_server_devx").
 -export([all/0, init_per_suite/1, end_per_suite/1, end_per_testcase/2]).
 -export([test_elixir_debug_session/1, test_variable_rebinding/1, test_mix_launch/1, test_mix_exunit_launch/1]).
+-export([test_pipeline_steps/1]).
 -include_lib("assert/include/assert.hrl").
 
-all() -> [test_elixir_debug_session, test_variable_rebinding, test_mix_launch, test_mix_exunit_launch].
+all() ->
+    [test_elixir_debug_session, test_variable_rebinding, test_mix_launch, test_mix_exunit_launch, test_pipeline_steps].
 
 init_per_suite(Config) ->
     case {code:which('Elixir.Code'), code:which('Elixir.Mix.Tasks.Compile.Edb')} of
@@ -47,6 +49,75 @@ test_variable_rebinding(_) ->
     },
     ?assertEqual([{~"x", ~"_x@12", {value, 12}}], edb_dap_language_elixir:visible_variables(Vars)),
     ?assertEqual(13, edb_dap_language_elixir:evaluate(~"x + 1", #{vars => Vars})).
+
+test_pipeline_steps(Config) ->
+    PrivDir = proplists:get_value(priv_dir, Config),
+    Source = filename:join(PrivDir, "pipeline.ex"),
+    ok = file:write_file(
+        Source,
+        ~"defmodule EdbPipelineFixture do\n def go(x) do\n  result = x\n  |> first()\n  |> EdbPipelineFixture.second()\n  |> third()\n  result\n end\n def first(x), do: x + 1\n def second(x), do: x * 2\n def third(x), do: x + 3\nend\n"
+    ),
+    [{Module, Binary}] = 'Elixir.Code':compile_file(list_to_binary(Source)),
+    Beam = filename:join(PrivDir, atom_to_list(Module) ++ ".beam"),
+    ok = file:write_file(Beam, Binary),
+    ok = 'Elixir.Mix.Tasks.Compile.Edb':instrument(list_to_binary(Beam)),
+    true = code:add_patha(PrivDir),
+    try
+        {ok, Client, #{peer := Peer}} = edb_dap_test_support:start_session_via_launch(
+            Config,
+            #{},
+            #{copy_code_path => true},
+            [{"ERL_AFLAGS", "-eval application:set_env(edb,dap_language,edb_dap_language_elixir)"}]
+        ),
+        % Enter from a function breakpoint: its first stop must be the first
+        % pipeline call, rather than the final outer call.
+        #{success := true, body := #{breakpoints := [#{verified := true}]}} =
+            edb_dap_test_client:set_function_breakpoints(Client, #{
+                breakpoints => [#{name => ~"EdbPipelineFixture.go/1"}]
+            }),
+        #{success := true} = edb_dap_test_client:configuration_done(Client),
+        peer:call(Peer, erlang, spawn, [Module, go, [2]]),
+        {ok, Thread, [#{line := 4} | _]} = wait_for_step(Client),
+        lists:foreach(
+            fun({CallLine, Function, FunctionLine, ReturnLine}) ->
+                #{success := true} = edb_dap_test_client:step_in(Client, #{threadId => Thread}),
+                {ok, Thread, [#{name := Function, line := FunctionLine}, #{line := CallLine} | _]} = wait_for_step(
+                    Client
+                ),
+                #{success := true} = edb_dap_test_client:step_out(Client, #{threadId => Thread}),
+                {ok, Thread, [#{line := ReturnLine} | _]} = wait_for_step(Client)
+            end,
+            [
+                {4, ~"EdbPipelineFixture.first/1", 9, 5},
+                {5, ~"EdbPipelineFixture.second/1", 10, 6},
+                {6, ~"EdbPipelineFixture.third/1", 11, 7}
+            ]
+        ),
+        #{success := true, body := #{stackFrames := [#{id := Frame} | _]}} =
+            edb_dap_test_client:stack_trace(Client, #{threadId => Thread}),
+        ?assertMatch(
+            #{success := true, body := #{result := ~"9"}},
+            edb_dap_test_client:evaluate(Client, #{frameId => Frame, expression => ~"result"})
+        ),
+        ?assertEqual(
+            #{~"x" => ~"2", ~"result" => ~"9"},
+            maps:get(vars, edb_dap_test_support:get_top_frame(Client, Thread))
+        ),
+        #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread}),
+        % Step-over visits each stage without entering its helper.
+        peer:call(Peer, erlang, spawn, [Module, go, [2]]),
+        {ok, Thread2, [#{line := 4} | _]} = wait_for_step(Client),
+        lists:foreach(
+            fun(Line) ->
+                #{success := true} = edb_dap_test_client:next(Client, #{threadId => Thread2}),
+                {ok, Thread2, [#{name := ~"EdbPipelineFixture.go/1", line := Line} | _]} = wait_for_step(Client)
+            end,
+            [5, 6, 7]
+        ),
+        #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread2})
+    after
+        code:del_path(PrivDir)
+    end.
 
 test_elixir_debug_session(Config) ->
     PrivDir = proplists:get_value(priv_dir, Config),

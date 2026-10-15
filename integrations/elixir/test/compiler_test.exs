@@ -59,4 +59,78 @@ defmodule Edb.CompilerTest do
     File.write!(path, binary)
     assert_raise Mix.Error, ~r/no debug info/, fn -> Mix.Tasks.Compile.Edb.instrument(path) end
   end
+
+  test "pipeline instrumentation preserves effects, branches, guards and tail calls", %{dir: dir} do
+    source = """
+    defmodule Edb.PipelineSemantics do
+      def run(enabled) do
+        Process.put(:edb_pipeline_events, [])
+        result = if enabled do
+          0
+          |> stage(:first)
+          |> stage(argument())
+          |> stage(:third)
+        else
+          :untouched
+        end
+        {result, Process.get(:edb_pipeline_events)}
+      end
+      def fail do
+        Process.put(:edb_pipeline_events, [])
+        0
+        |> stage(:first)
+        |> raise_stage()
+        |> stage(:unreachable)
+      end
+      def guarded(x) when x |> abs() |> is_integer(), do: x
+      def loop(0), do: :done
+      def loop(x) do
+        x
+        |> decrement()
+        |> loop()
+      end
+      defp decrement(x), do: x - 1
+      defp stage(value, tag) do
+        Process.put(:edb_pipeline_events, Process.get(:edb_pipeline_events) ++ [tag])
+        value + 1
+      end
+      defp argument do
+        Process.put(:edb_pipeline_events, Process.get(:edb_pipeline_events) ++ [:argument])
+        :second
+      end
+      defp raise_stage(value) do
+        if value > 0, do: raise("pipeline failure"), else: value
+      end
+    end
+    """
+
+    [{module, binary}] = Code.compile_string(source, Path.join(dir, "pipeline.ex"))
+    path = Path.join(dir, "#{module}.beam")
+    File.write!(path, binary)
+    before = apply(module, :run, [true])
+    assert before == {3, [:first, :argument, :second, :third]}
+    assert :ok == Mix.Tasks.Compile.Edb.instrument(path)
+    assert apply(module, :run, [true]) == before
+    assert apply(module, :run, [false]) == {:untouched, []}
+    assert apply(module, :guarded, [-3]) == -3
+    assert apply(module, :loop, [100_000]) == :done
+    assert_raise RuntimeError, "pipeline failure", fn -> apply(module, :fail, []) end
+    assert Process.get(:edb_pipeline_events) == [:first]
+
+    {:beam_file, _, _, _, _, functions} = :beam_disasm.file(String.to_charlist(path))
+    {:function, :loop, 1, _, instructions} = List.keyfind(functions, :loop, 1)
+    assert Enum.any?(instructions, &match?({:call_last, 1, {^module, :loop, 1}, _}, &1))
+
+    # Existing projects must upgrade instrumentation without a clean build.
+    {:ok, ^module, chunks} = :beam_lib.all_chunks(String.to_charlist(path))
+
+    {:ok, legacy} =
+      :beam_lib.build_module(List.keyreplace(chunks, ~c"EdbI", 0, {~c"EdbI", <<1>>}))
+
+    File.write!(path, legacy)
+    assert :ok == Mix.Tasks.Compile.Edb.instrument(path)
+    assert :noop == Mix.Tasks.Compile.Edb.instrument(path)
+    assert apply(module, :run, [true]) == before
+    Process.delete(:edb_pipeline_events)
+  end
 end

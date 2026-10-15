@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Compile.Edb do
   use Mix.Task.Compiler
 
+  @instrumentation_version <<2>>
+
   @shortdoc "Adds edb breakpoint and variable instrumentation to Elixir modules"
   @moduledoc """
   Add `:edb` after `:elixir` in your project's `:compilers` in development/test.
@@ -28,7 +30,7 @@ defmodule Mix.Tasks.Compile.Edb do
     {:ok, module, chunks} = :beam_lib.all_chunks(String.to_charlist(path))
 
     # The custom marker avoids rebuilding unchanged modules on every Mix run.
-    if List.keymember?(chunks, ~c"EdbI", 0) do
+    if List.keyfind(chunks, ~c"EdbI", 0) == {~c"EdbI", @instrumentation_version} do
       :noop
     else
       compile(path, module, chunks)
@@ -67,11 +69,11 @@ defmodule Mix.Tasks.Compile.Edb do
       {:source, Keyword.fetch!(info, :source)},
       {:debug_info, {backend, data}},
       :debug_info,
-      {:extra_chunks, [{"EdbI", <<1>>} | extras]}
+      {:extra_chunks, [{"EdbI", @instrumentation_version} | extras]}
       | opts
     ]
 
-    case :compile.forms(forms, opts) do
+    case :compile.forms(Edb.PipelineSteps.rewrite(forms), opts) do
       {:ok, ^module, binary, _warnings} ->
         File.write!(path, binary)
         # Mix may have already loaded the module during compilation.

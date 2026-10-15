@@ -146,6 +146,14 @@ Run umbrella tests from the relevant child application.
 
 ## Expressions
 
+Multiline pipelines of direct local or remote function calls have a stop at
+each stage. Step into enters the current stage; step out returns to the next
+stage; step over advances without entering the stage. The compiler introduces
+hidden temporary bindings while preserving argument evaluation order and tail
+calls. Existing instrumented modules are upgraded on the next compilation.
+Guards, generated macro code, dynamic callees and calls sharing one source line
+retain their original compiler stepping behavior.
+
 Watch/REPL expressions use Elixir syntax and the selected frame's most recent
 variable bindings. Compiler-generated temporaries are hidden. Values use Elixir's
 `inspect` representation. Expressions run in a separate evaluator process, as in
