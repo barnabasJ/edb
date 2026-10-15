@@ -63,6 +63,10 @@ handle_edb_event(Event, _State) ->
 %%% Implementations
 %%%---------------------------------------------------------------------------------
 -spec nodedown_impl(edb_dap_server:state(), Node :: node(), Reason :: term()) -> reaction().
+nodedown_impl(#{node := Node, port := Port}, Node, _Reason) when is_port(Port) ->
+    % For an owned process, the port exit status is authoritative. Distribution
+    % commonly closes before the OS process exits, including on test failures.
+    #{};
 nodedown_impl(#{node := Node}, Node, Reason) ->
     ExitCode =
         case Reason of

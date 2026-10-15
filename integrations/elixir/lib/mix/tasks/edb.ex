@@ -12,10 +12,15 @@ defmodule Mix.Tasks.Edb do
 
   @impl true
   def run(args) do
+    connect()
+    Mix.Task.run("run", args)
+  end
+
+  @doc false
+  def connect do
     code = System.fetch_env!("EDB_DAP_DEBUGGEE_INIT")
     {:ok, tokens, _} = :erl_scan.string(String.to_charlist(code <> "."))
     {:ok, expressions} = :erl_parse.parse_exprs(tokens)
     :erl_eval.exprs(expressions, :erl_eval.new_bindings())
-    Mix.Task.run("run", args)
   end
 end

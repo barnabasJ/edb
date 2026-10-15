@@ -97,7 +97,7 @@ Use the actual hostname reported by `Node.self()` in your attach configuration:
 }
 ```
 
-## Expressions and source files
+## Source files and function breakpoints
 
 Use `MyApp.Worker.run/1` or `&MyApp.Worker.run/1` for function breakpoints. Erlang
 function notation remains accepted. Source lookup uses compiled source metadata,
@@ -106,11 +106,45 @@ including modules on the code path that have not yet been loaded. Files must be
 compiled before setting breakpoints; top-level script expressions outside a
 module are not instrumented by the Mix compiler.
 
-ExUnit compiles `.exs` test files at runtime, after the Mix compiler has finished.
-Those test modules are currently not instrumented, so breakpoints in test bodies
-are not supported. You can debug compiled library code exercised by an existing
-test by launching `mix edb -e 'Mix.Task.run("test", ["test/example_test.exs:42"])'`
-with `MIX_ENV=test` through DAP.
+## ExUnit test files
+
+For breakpoints in ExUnit `.exs` files, use `mix edb.test` through DAP instead of
+`mix edb -e 'Mix.Task.run("test", ...)'`. For example, use this launch configuration:
+
+```json
+{
+  "type": "erlang-edb",
+  "request": "launch",
+  "name": "Debug ExUnit test",
+  "runInTerminal": {
+    "kind": "integrated",
+    "cwd": "${workspaceFolder}",
+    "args": ["mix", "edb.test", "test/example_test.exs:42", "--seed", "0"],
+    "env": {"MIX_ENV": "test"}
+  },
+  "config": {
+    "language": "elixir",
+    "nameDomain": "shortnames",
+    "nodeInitCodeInEnvVar": "EDB_DAP_DEBUGGEE_INIT",
+    "timeout": 300
+  }
+}
+```
+
+`edb.test` requires and instruments the selected files before connecting, so the
+IDE can verify breakpoints before tests run. Test bodies, `setup` and `setup_all`
+callbacks support breakpoints, stepping and variables, including async cases.
+Application startup, test helpers and top-level script expressions execute during
+preparation, before the debugger connects. Helpers and test files are required
+once; execution and filtering are delegated to `mix test`.
+
+File, directory and line selectors and the usual seed, trace, include/exclude,
+only and timeout flags are supported. Test timeouts default to infinity while
+debugging; use `--timeout` to set a finite timeout. The preloading path does not
+support `--stale`, `--failed`, `--cover`, `--partitions` or require profiling.
+Run umbrella tests from the relevant child application.
+
+## Expressions
 
 Watch/REPL expressions use Elixir syntax and the selected frame's most recent
 variable bindings. Compiler-generated temporaries are hidden. Values use Elixir's

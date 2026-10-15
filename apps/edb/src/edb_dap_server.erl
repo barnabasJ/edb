@@ -264,8 +264,16 @@ handle_debuggee_port_event({exit_status, Status}, #{state := launching}) ->
             {event, edb_dap_event:terminated()}
         ]
     };
-handle_debuggee_port_event({exit_status, _Status}, _State) ->
+handle_debuggee_port_event({exit_status, _Status}, #{state := terminating}) ->
     #{};
+handle_debuggee_port_event({exit_status, Status}, _State) ->
+    #{
+        new_state => #{state => terminating},
+        actions => [
+            {event, edb_dap_event:exited(Status)},
+            {event, edb_dap_event:terminated()}
+        ]
+    };
 handle_debuggee_port_event(UnexpectedEvent, _State) ->
     ?LOG_WARNING("Skipping unexpected port event ~tp", [UnexpectedEvent]),
     #{}.

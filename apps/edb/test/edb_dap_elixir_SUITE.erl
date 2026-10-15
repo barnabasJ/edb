@@ -16,10 +16,10 @@
 -module(edb_dap_elixir_SUITE).
 -oncall("whatsapp_server_devx").
 -export([all/0, init_per_suite/1, end_per_suite/1, end_per_testcase/2]).
--export([test_elixir_debug_session/1, test_variable_rebinding/1, test_mix_launch/1]).
+-export([test_elixir_debug_session/1, test_variable_rebinding/1, test_mix_launch/1, test_mix_exunit_launch/1]).
 -include_lib("assert/include/assert.hrl").
 
-all() -> [test_elixir_debug_session, test_variable_rebinding, test_mix_launch].
+all() -> [test_elixir_debug_session, test_variable_rebinding, test_mix_launch, test_mix_exunit_launch].
 
 init_per_suite(Config) ->
     case {code:which('Elixir.Code'), code:which('Elixir.Mix.Tasks.Compile.Edb')} of
@@ -220,3 +220,96 @@ assert_expandable_expression(Client, Frame) ->
         #{success := true, body := #{result := ~"[2, 3]"}},
         edb_dap_test_client:evaluate(Client, #{frameId => Frame, expression => ElementExpression})
     ).
+
+test_mix_exunit_launch(Config) ->
+    PrivDir = proplists:get_value(priv_dir, Config),
+    Project = filename:join(PrivDir, "mix_exunit_project"),
+    ok = filelib:ensure_dir(filename:join([Project, "test", "example_test.exs"])),
+    TaskSource = proplists:get_value(source, 'Elixir.Mix.Tasks.Compile.Edb':module_info(compile)),
+    PackagePath = lists:foldl(fun(_, Path) -> filename:dirname(Path) end, TaskSource, lists:seq(1, 4)),
+    ok = file:write_file(
+        filename:join(Project, "mix.exs"),
+        io_lib:format(
+            "defmodule EdbExUnit.MixProject do\n use Mix.Project\n def project, do: [app: :edb_exunit, version: \"0.1.0\", deps: [{:edb_mix, path: ~p, runtime: false}]]\nend\n",
+            [PackagePath]
+        )
+    ),
+    ok = file:write_file(
+        filename:join([Project, "test", "test_helper.exs"]),
+        ~"File.write!(\"helper_calls\", \"called\n\", [:append])\nExUnit.start()\n"
+    ),
+    Source = filename:join([Project, "test", "example_test.exs"]),
+    ok = file:write_file(
+        Source,
+        ~"defmodule EdbRuntimeTest do\n use ExUnit.Case, async: true\n setup do\n  value = 40\n  {:ok, value: value}\n end\n test \"selected\", %{value: value} do\n  answer = value + 2\n  assert answer == 42\n end\n test \"excluded\" do\n  flunk(\"line selection was lost\")\n end\nend\ndefmodule EdbOtherRuntimeTest do\n use ExUnit.Case, async: true\n test \"also excluded\", do: flunk(\"other module ran\")\nend\n"
+    ),
+    {ok, Client} = launch_exunit(Config, Project, "test/example_test.exs:7"),
+    try
+        ?assertMatch(
+            #{success := true, body := #{breakpoints := [#{verified := true}, #{verified := true}]}},
+            edb_dap_test_client:set_breakpoints(Client, #{
+                source => #{path => list_to_binary(Source)},
+                breakpoints => [#{line => 4}, #{line => 8}]
+            })
+        ),
+        #{success := true} = edb_dap_test_client:configuration_done(Client),
+        {ok, Thread, [#{line := 4} | _]} = edb_dap_test_support:wait_for_bp(Client),
+        #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread}),
+        {ok, Thread2, [#{id := Frame, name := ~"EdbRuntimeTest.test selected/1", line := 8} | _]} =
+            edb_dap_test_support:wait_for_bp(Client),
+        ?assertMatch(
+            #{success := true, body := #{result := ~"42"}},
+            edb_dap_test_client:evaluate(Client, #{frameId => Frame, expression => ~"value + 2"})
+        ),
+        #{success := true} = edb_dap_test_client:next(Client, #{threadId => Thread2}),
+        {ok, Thread2, [#{id := Frame2, line := 9} | _]} = wait_for_step(Client),
+        ?assertMatch(
+            #{success := true, body := #{result := ~"42"}},
+            edb_dap_test_client:evaluate(Client, #{frameId => Frame2, expression => ~"answer"})
+        ),
+        #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread2}),
+        {ok, [#{body := #{exitCode := 0}}]} = edb_dap_test_client:wait_for_event(~"exited", Client),
+        ?assertEqual({ok, ~"called\n"}, file:read_file(filename:join(Project, "helper_calls")))
+    after
+        edb_dap_test_client:disconnect(Client, #{terminateDebuggee => true})
+    end,
+    % The same entry point must retain Mix's failing-test exit status.
+    {ok, FailedClient} = launch_exunit(Config, Project, "test/example_test.exs:11"),
+    try
+        #{success := true} = edb_dap_test_client:configuration_done(FailedClient),
+        {ok, [#{body := #{exitCode := 2}}]} = edb_dap_test_client:wait_for_event(~"exited", FailedClient)
+    after
+        edb_dap_test_client:disconnect(FailedClient, #{terminateDebuggee => true})
+    end.
+
+launch_exunit(Config, Project, Selection) ->
+    {ok, Client} = edb_dap_test_support:start_test_client(Config),
+    #{success := true} = edb_dap_test_client:initialize(Client, #{adapterID => ~"edb-exunit-test"}),
+    TaskDir = filename:dirname(code:which('Elixir.Mix.Tasks.Compile.Edb')),
+    #{success := true} = edb_dap_test_client:launch(Client, #{
+        run => #{
+            cwd => list_to_binary(Project),
+            args => [
+                list_to_binary(os:find_executable("elixir")),
+                ~"-pa",
+                list_to_binary(TaskDir),
+                ~"-S",
+                ~"mix",
+                ~"edb.test",
+                list_to_binary(Selection),
+                ~"--seed",
+                ~"0",
+                ~"--exit-status",
+                ~"2"
+            ],
+            env => #{~"MIX_ENV" => ~"test"}
+        },
+        config => #{
+            nameDomain => shortnames,
+            language => elixir,
+            nodeInitCodeInEnvVar => ~"EDB_DAP_DEBUGGEE_INIT",
+            timeout => 30
+        }
+    }),
+    {ok, [_]} = edb_dap_test_client:wait_for_event(~"initialized", Client),
+    {ok, Client}.
