@@ -84,7 +84,7 @@ defmodule Mix.Tasks.Edb.Test do
     Code.prepend_path(directory)
 
     try do
-      prepare(paths, opts, directory)
+      prepare(paths, opts, ex_unit_opts, directory)
       ExUnit.configure(timeout: opts[:timeout] || :infinity)
       Mix.Tasks.Edb.connect()
       Mix.Task.run("test", args)
@@ -94,7 +94,7 @@ defmodule Mix.Tasks.Edb.Test do
     end
   end
 
-  defp prepare(paths, opts, directory) do
+  defp prepare(paths, opts, ex_unit_opts, directory) do
     project = Mix.Project.config()
     test_paths = project[:test_paths] || ["test"]
     compiler_options = Keyword.merge(project[:test_elixirc_options] || [], debug_info: true)
@@ -115,6 +115,18 @@ defmodule Mix.Tasks.Edb.Test do
           end
         end
       end
+
+      # Like mix test, restore CLI options after helpers configure ExUnit.
+      # Helper excludes are additive; other CLI options take precedence.
+      excludes = List.wrap(Application.get_env(:ex_unit, :exclude, []))
+
+      ex_unit_opts
+      |> Keyword.update(:exclude, excludes, &Enum.uniq(&1 ++ excludes))
+      |> Keyword.put_new_lazy(:failures_manifest_path, fn ->
+        Application.get_env(:ex_unit, :failures_manifest_path) ||
+          Path.join(Mix.Project.manifest_path(), ".mix_test_failures")
+      end)
+      |> ExUnit.configure()
 
       files = selected_files(paths, test_paths, project)
 

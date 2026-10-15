@@ -71,6 +71,44 @@ defmodule Edb.TestTaskTest do
     end
   end
 
+  test "CLI options win over helper configuration before test files load", %{dir: dir} do
+    File.write!(Path.join(dir, "test/test_helper.exs"), """
+    ExUnit.start(include: [:from_helper], exclude: [:helper_excluded], seed: 99)
+    """)
+
+    check = """
+    config = ExUnit.configuration()
+    unless :integration in config[:include] and config[:seed] == 42 do
+      raise "helper overrode CLI configuration"
+    end
+    unless :helper_excluded in config[:exclude] and :cli_excluded in config[:exclude] do
+      raise "helper and CLI excludes must be combined"
+    end
+    """
+
+    {output, status} =
+      run_fixture(dir, "assert true", check, [
+        "--include",
+        "integration",
+        "--exclude",
+        "cli_excluded",
+        "--seed",
+        "42"
+      ])
+
+    assert status == 0, output
+  end
+
+  test "helper excludes still prevent tests from running", %{dir: dir} do
+    File.write!(Path.join(dir, "test/test_helper.exs"), "ExUnit.start(exclude: [:integration])\n")
+
+    {output, status} =
+      run_fixture(dir, "flunk(\"helper exclude was lost\")", "", ["--seed", "42"])
+
+    assert status == 0, output
+    assert output =~ "excluded"
+  end
+
   defp run_fixture(dir, body, top_level \\ "", args \\ []) do
     File.write!(Path.join(dir, "test/example_test.exs"), """
     #{top_level}
