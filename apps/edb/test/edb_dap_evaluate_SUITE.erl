@@ -146,7 +146,9 @@ test_evaluate_exception(Config) ->
             ?assertEqual(
                 #{
                     success => false,
-                    body => #{error => #{id => -32002, format => ~"Uncaught exception -- error:badarith"}}
+                    body => #{
+                        error => #{id => -32002, format => ~"Uncaught exception -- error:badarith", showUser => true}
+                    }
                 },
                 EvalResponse
             )
@@ -174,7 +176,7 @@ test_evaluate_compile_error(Config) ->
             ?assertEqual(
                 #{
                     success => false,
-                    body => #{error => #{id => -32002, format => ~"1:5:syntax error before: ';'"}}
+                    body => #{error => #{id => -32002, format => ~"1:5:syntax error before: ';'", showUser => true}}
                 },
                 EvalResponse
             ),
@@ -185,7 +187,7 @@ test_evaluate_compile_error(Config) ->
                 #{
                     success => false,
                     body => #{
-                        error => #{id => -32002, format => ~"1:1:variable 'Z' is unbound"}
+                        error => #{id => -32002, format => ~"1:1:variable 'Z' is unbound", showUser => true}
                     }
                 },
                 EvalResponse2

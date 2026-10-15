@@ -352,7 +352,7 @@ format_exception(Class, Reason, StackTrace) ->
 build_error_response(Id, Message) ->
     #{
         success => false,
-        body => #{error => #{id => Id, format => erlang:iolist_to_binary(Message)}}
+        body => #{error => #{id => Id, format => erlang:iolist_to_binary(Message), showUser => true}}
     }.
 
 -spec log_error(IsHandlingRequest, Error) -> ok when

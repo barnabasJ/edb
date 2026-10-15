@@ -144,6 +144,21 @@ debugging; use `--timeout` to set a finite timeout. The preloading path does not
 support `--stale`, `--failed`, `--cover`, `--partitions` or require profiling.
 Run umbrella tests from the relevant child application.
 
+## Neovim
+
+When configuring `nvim-dap`, load the EDB stepping recovery helper:
+
+```lua
+dofile('/path/to/edb/integrations/neovim/edb.lua').setup()
+```
+
+If EDB rejects a step into code without debugger instrumentation, the helper
+checks that the process is still paused and restores the selected process,
+source marker and scopes. The step error remains visible. Step over the call
+or continue to another breakpoint. This also applies to a rejected step out
+into an uninstrumented caller. Process pickers include `proc_lib` labels,
+including ExUnit module and test names.
+
 ## Expressions
 
 Multiline pipelines of direct local or remote function calls have a stop at
