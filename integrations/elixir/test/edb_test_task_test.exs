@@ -15,10 +15,10 @@
 defmodule Edb.TestTaskTest do
   use ExUnit.Case, async: false
 
-  setup do
-    dir = Path.join(System.tmp_dir!(), "edb-task-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: dir} do
     File.mkdir_p!(Path.join(dir, "test"))
-    on_exit(fn -> File.rm_rf!(dir) end)
 
     File.write!(Path.join(dir, "mix.exs"), """
     defmodule Fixture.MixProject do
@@ -31,17 +31,19 @@ defmodule Edb.TestTaskTest do
     """)
 
     File.write!(Path.join(dir, "test/test_helper.exs"), "ExUnit.start()\n")
-    %{dir: dir}
+    :ok
   end
 
-  test "clean tests pass warnings-as-errors without a parallel compiler deprecation", %{dir: dir} do
+  test "clean tests pass warnings-as-errors without a parallel compiler deprecation", %{
+    tmp_dir: dir
+  } do
     {output, status} = run_fixture(dir, "assert true")
     assert status == 0, output
     refute output =~ "you must pass return_diagnostics"
     assert output =~ "Running ExUnit"
   end
 
-  test "compile warnings still fail preparation with warnings-as-errors", %{dir: dir} do
+  test "compile warnings still fail preparation with warnings-as-errors", %{tmp_dir: dir} do
     {output, status} = run_fixture(dir, "unused_value = 1\nassert true")
     assert status != 0
     assert output =~ "unused_value"
@@ -49,7 +51,7 @@ defmodule Edb.TestTaskTest do
     refute output =~ "you must pass return_diagnostics"
   end
 
-  test "application warnings are allowed on cold builds like mix test", %{dir: dir} do
+  test "application warnings are allowed on cold builds like mix test", %{tmp_dir: dir} do
     File.mkdir_p!(Path.join(dir, "lib"))
 
     File.write!(Path.join(dir, "lib/example.ex"), """
@@ -69,7 +71,7 @@ defmodule Edb.TestTaskTest do
     end
   end
 
-  test "runtime warnings still fail preparation with warnings-as-errors", %{dir: dir} do
+  test "runtime warnings still fail preparation with warnings-as-errors", %{tmp_dir: dir} do
     {output, status} = run_fixture(dir, "assert true", "IO.warn(\"fixture runtime warning\")")
     assert status != 0
     assert output =~ "fixture runtime warning"
@@ -77,7 +79,7 @@ defmodule Edb.TestTaskTest do
     refute output =~ "you must pass return_diagnostics"
   end
 
-  test "CLI filters are configured before loading helpers and test files", %{dir: dir} do
+  test "CLI filters are configured before loading helpers and test files", %{tmp_dir: dir} do
     for {flag, key} <- [{"--include", :include}, {"--exclude", :exclude}, {"--only", :include}] do
       check = """
       unless :integration in ExUnit.configuration()[#{inspect(key)}] do
@@ -91,7 +93,7 @@ defmodule Edb.TestTaskTest do
     end
   end
 
-  test "CLI options win over helper configuration before test files load", %{dir: dir} do
+  test "CLI options win over helper configuration before test files load", %{tmp_dir: dir} do
     File.write!(Path.join(dir, "test/test_helper.exs"), """
     ExUnit.start(include: [:from_helper], exclude: [:helper_excluded], seed: 99)
     """)
@@ -119,7 +121,7 @@ defmodule Edb.TestTaskTest do
     assert status == 0, output
   end
 
-  test "helper excludes still prevent tests from running", %{dir: dir} do
+  test "helper excludes still prevent tests from running", %{tmp_dir: dir} do
     File.write!(Path.join(dir, "test/test_helper.exs"), "ExUnit.start(exclude: [:integration])\n")
 
     {output, status} =

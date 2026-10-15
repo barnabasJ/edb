@@ -15,16 +15,14 @@
 defmodule Edb.CompilerTest do
   use ExUnit.Case, async: false
 
+  @moduletag :tmp_dir
+
   setup do
     options = Code.compiler_options(debug_info: true, docs: true)
     on_exit(fn -> Code.compiler_options(options) end)
-    dir = Path.join(System.tmp_dir!(), "edb-mix-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    on_exit(fn -> File.rm_rf!(dir) end)
-    %{dir: dir}
   end
 
-  test "instruments real Elixir code while retaining Elixir metadata", %{dir: dir} do
+  test "instruments real Elixir code while retaining Elixir metadata", %{tmp_dir: dir} do
     source = Path.join(dir, "fixture.ex")
 
     File.write!(source, """
@@ -57,7 +55,7 @@ defmodule Edb.CompilerTest do
              :beam_lib.chunks(String.to_charlist(path), [:abstract_code])
   end
 
-  test "reports modules compiled without debug information", %{dir: dir} do
+  test "reports modules compiled without debug information", %{tmp_dir: dir} do
     [{module, binary}] =
       Code.compile_string(
         """
@@ -74,7 +72,7 @@ defmodule Edb.CompilerTest do
     assert_raise Mix.Error, ~r/no debug info/, fn -> Mix.Tasks.Compile.Edb.instrument(path) end
   end
 
-  test "compiler discovers Elixir by backend and leaves Erlang modules intact", %{dir: dir} do
+  test "compiler discovers Elixir by backend and leaves Erlang modules intact", %{tmp_dir: dir} do
     in_project(dir, fn compile_path ->
       modules =
         Code.compile_string("""
@@ -121,7 +119,7 @@ defmodule Edb.CompilerTest do
     end)
   end
 
-  test "compiler reports namespaced Elixir modules without debug information", %{dir: dir} do
+  test "compiler reports namespaced Elixir modules without debug information", %{tmp_dir: dir} do
     in_project(dir, fn compile_path ->
       [{module, binary}] =
         Code.compile_string("""
@@ -137,7 +135,7 @@ defmodule Edb.CompilerTest do
     end)
   end
 
-  test "instrumentation does not rerun on_load and takes effect on the next load", %{dir: dir} do
+  test "instrumentation does not rerun on_load and takes effect on the next load", %{tmp_dir: dir} do
     calls = Path.join(dir, "on_load_calls")
 
     [{module, binary}] =
@@ -168,7 +166,7 @@ defmodule Edb.CompilerTest do
     assert apply(module, :value, []) == 42
   end
 
-  test "instrumentation preserves a loaded NIF without an upgrade callback", %{dir: dir} do
+  test "instrumentation preserves a loaded NIF without an upgrade callback", %{tmp_dir: dir} do
     nif_path = Path.join(dir, "fixture_nif")
     source = nif_path <> ".c"
 
@@ -220,7 +218,9 @@ defmodule Edb.CompilerTest do
     assert apply(module, :value, []) == 42
   end
 
-  test "pipeline instrumentation preserves effects, branches, guards and tail calls", %{dir: dir} do
+  test "pipeline instrumentation preserves effects, branches, guards and tail calls", %{
+    tmp_dir: dir
+  } do
     source = """
     defmodule Edb.PipelineSemantics do
       def run(enabled) do
