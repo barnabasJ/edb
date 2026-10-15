@@ -3,8 +3,9 @@
 The Elixir integration supports source and function breakpoints, pause/continue,
 step into/over/out, stack traces, local variables, expandable values, process
 inspection, and Elixir expression evaluation through the existing DAP adapter.
-Use Erlang/OTP 29 or later and Elixir 1.18 or later; the integration is tested with
-OTP 29.1 and Elixir 1.20.4.
+Use Erlang/OTP 29 or later and Elixir 1.20.1 or later; the integration is tested
+with OTP 29.1 and Elixir 1.20.1 and 1.20.4. The integration uses Mix’s regular
+expression test filters and targets Elixir releases built for OTP 29.
 
 ## Prepare a Mix project
 
