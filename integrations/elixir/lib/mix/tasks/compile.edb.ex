@@ -32,11 +32,27 @@ defmodule Mix.Tasks.Compile.Edb do
 
     results =
       Mix.Project.compile_path()
-      |> Path.join("Elixir.*.beam")
+      |> Path.join("*.beam")
       |> Path.wildcard()
+      |> Enum.filter(&elixir_module?/1)
       |> Enum.map(&instrument/1)
 
     if :ok in results, do: {:ok, []}, else: {:noop, []}
+  end
+
+  defp elixir_module?(path) do
+    case :beam_lib.chunks(String.to_charlist(path), [:debug_info]) do
+      {:ok, {_, [debug_info: {:debug_info_v1, :elixir_erl, _}]}} ->
+        true
+
+      {:ok, {_, [debug_info: :no_debug_info]}} ->
+        # Retain the actionable error for ordinary Elixir modules whose debug
+        # information was disabled; their backend is no longer available.
+        String.starts_with?(Path.basename(path), "Elixir.")
+
+      _ ->
+        false
+    end
   end
 
   @doc false

@@ -74,6 +74,69 @@ defmodule Edb.CompilerTest do
     assert_raise Mix.Error, ~r/no debug info/, fn -> Mix.Tasks.Compile.Edb.instrument(path) end
   end
 
+  test "compiler discovers Elixir by backend and leaves Erlang modules intact", %{dir: dir} do
+    in_project(dir, fn compile_path ->
+      modules =
+        Code.compile_string("""
+        defmodule :edb_atom_fixture do
+          def value(x), do: x + 1
+        end
+        defmodule Edb.DiscoveryFixture do
+          def value(x), do: x + 2
+        end
+        """)
+
+      for {module, binary} <- modules do
+        on_exit(fn -> unload(module) end)
+        File.write!(Path.join(compile_path, "#{module}.beam"), binary)
+      end
+
+      erlang_modules =
+        for module <- [:edb_erlang_fixture, Edb.ErlangFixture] do
+          source = Path.join(dir, "#{module}.erl")
+
+          File.write!(source, """
+          -module('#{module}').
+          -export([value/1]).
+          value(X) -> X + 3.
+          """)
+
+          {:ok, ^module, binary} =
+            :compile.file(String.to_charlist(source), [:binary, :debug_info])
+
+          path = Path.join(compile_path, "#{module}.beam")
+          File.write!(path, binary)
+          {path, binary}
+        end
+
+      assert {:ok, []} == Mix.Tasks.Compile.Edb.run([])
+
+      for {module, _} <- modules do
+        assert [_ | _] = :code.get_debug_info(module)
+        assert apply(module, :value, [1]) in [2, 3]
+      end
+
+      for {path, binary} <- erlang_modules, do: assert(File.read!(path) == binary)
+      assert {:noop, []} == Mix.Tasks.Compile.Edb.run([])
+    end)
+  end
+
+  test "compiler reports namespaced Elixir modules without debug information", %{dir: dir} do
+    in_project(dir, fn compile_path ->
+      [{module, binary}] =
+        Code.compile_string("""
+        defmodule Edb.DiscoveryNoDebugFixture do
+          @compile {:debug_info, false}
+          def value, do: :ok
+        end
+        """)
+
+      on_exit(fn -> unload(module) end)
+      File.write!(Path.join(compile_path, "#{module}.beam"), binary)
+      assert_raise Mix.Error, ~r/no debug info/, fn -> Mix.Tasks.Compile.Edb.run([]) end
+    end)
+  end
+
   test "instrumentation does not rerun on_load and takes effect on the next load", %{dir: dir} do
     calls = Path.join(dir, "on_load_calls")
 
@@ -235,5 +298,29 @@ defmodule Edb.CompilerTest do
     :code.purge(module)
     :code.delete(module)
     :code.purge(module)
+  end
+
+  defp in_project(dir, fun) do
+    File.write!(Path.join(dir, "mix.exs"), """
+    defmodule CompilerFixture.MixProject do
+      use Mix.Project
+      def project, do: [app: :edb_compiler_fixture, version: "0.1.0"]
+    end
+    """)
+
+    previous = System.get_env("MIX_BUILD_PATH")
+    System.put_env("MIX_BUILD_PATH", Path.join(dir, "_build"))
+
+    try do
+      Mix.Project.in_project(:edb_compiler_fixture, dir, fn _ ->
+        path = Mix.Project.compile_path()
+        File.mkdir_p!(path)
+        fun.(path)
+      end)
+    after
+      if previous,
+        do: System.put_env("MIX_BUILD_PATH", previous),
+        else: System.delete_env("MIX_BUILD_PATH")
+    end
   end
 end
