@@ -53,6 +53,7 @@ launch requests: https://microsoft.github.io/debug-adapter-protocol/specificatio
 }.
 -type run_in_terminal() :: edb_dap_reverse_request_run_in_terminal:arguments().
 -type config() :: #{
+    language => erlang | elixir,
     nameDomain := shortnames | longnames,
     nodeInitCodeInEnvVar => binary(),
     stripSourcePrefix => binary(),
@@ -91,6 +92,7 @@ arguments_template() ->
             #{
                 nameDomain => edb_dap_parse:atoms([shortnames, longnames]),
                 nodeInitCodeInEnvVar => {optional, edb_dap_parse:binary()},
+                language => {optional, edb_dap_parse:atoms([erlang, elixir])},
                 stripSourcePrefix => {optional, edb_dap_parse:binary()},
                 timeout => {optional, edb_dap_parse:non_neg_integer()}
             }
@@ -158,6 +160,7 @@ handle(_InvalidState, _Args) ->
     Config :: config(),
     UserEnv :: #{binary() => binary() | null}.
 prepare_launch(Config, UserEnv) ->
+    configure_language(Config),
     #{nameDomain := NameDomain} = Config,
     AttachTimeoutInSecs = maps:get(timeout, Config, ?DEFAULT_ATTACH_TIMEOUT_IN_SECS),
 
@@ -325,3 +328,10 @@ update_code_to_inject_info_in_env(CodeToInject, _Config, Env) ->
 unsupported_by_client(What, ClientInfo) ->
     ClientName = maps:get(clientName, ClientInfo, "the client"),
     edb_dap_request:unsupported(io_lib:format("~s is not supported by ~s", [What, ClientName])).
+
+-spec configure_language(config()) -> ok.
+configure_language(Config) ->
+    case Config of
+        #{language := Language} -> edb_dap_language:configure(Language);
+        _ -> ok
+    end.

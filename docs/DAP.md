@@ -48,6 +48,7 @@ A typical attach request looks like this:
 | `cookie` | string | optional | Cookie for connecting to the Erlang node |
 | `cwd` | string | required | Working directory for resolving relative source files |
 | `stripSourcePrefix` | string | optional | Prefix to strip from source file paths |
+| `language` | string | optional | `"erlang"` (default) or `"elixir"`; see the [Elixir guide](ELIXIR.md) |
 
 
 The `stripSourcePrefix` option can be useful in some mono-repo settings, when paths
@@ -128,6 +129,7 @@ you don't need a terminal. EDB spawns the debuggee process directly.
 | `nameDomain` | string | required | Node name domain: `"shortnames"` or `"longnames"` |
 | `nodeInitCodeInEnvVar` | string | optional | Environment variable to store node initialization code |
 | `stripSourcePrefix` | string | optional | Prefix to strip from source file paths |
+| `language` | string | optional | `"erlang"` (default) or `"elixir"`; see the [Elixir guide](ELIXIR.md) |
 | `timeout` | number | optional | Timeout in seconds for the debugger to attach (default: 60) |
 
 

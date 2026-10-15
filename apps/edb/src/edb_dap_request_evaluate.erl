@@ -173,7 +173,7 @@ handle(#{state := attached, client_info := ClientInfo}, Args = #{expression := E
         Line = maps:get(line, Args, 1),
         Col = maps:get(column, Args, 1),
         {ok, CompiledExpr} ?=
-            case edb_expr:compile_expr(Expr, #{free_vars => FreeVars, start_line => Line, start_col => Col}) of
+            case compile_expression(Expr, #{free_vars => FreeVars, start_line => Line, start_col => Col}) of
                 {error, CompileErr} -> {compile_error, CompileErr};
                 CompileRes = {ok, _} -> CompileRes
             end,
@@ -236,3 +236,10 @@ maybe_add_pagination_info(#{supportsVariablePaging := true}, #{count := N}, Body
     Body#{indexedVariables => N};
 maybe_add_pagination_info(_ClientInfo, _Structure, Body) ->
     Body.
+
+-spec compile_expression(binary(), map()) -> dynamic().
+compile_expression(Expr, Opts) ->
+    case edb_dap_language:implementation() of
+        edb_dap_language_elixir -> {ok, #{language => elixir, expression => Expr}};
+        _ -> edb_expr:compile_expr(Expr, Opts)
+    end.

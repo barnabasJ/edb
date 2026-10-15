@@ -143,7 +143,8 @@ test_multiple_function_breakpoints(Config) ->
                     #{verified := true},
                     #{
                         verified := false,
-                        message := ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}",
+                        message :=
+                            ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}; `Module.function/arity`",
                         reason := ~"failed"
                     },
                     #{verified := true},
@@ -271,7 +272,8 @@ test_error_invalid_name(Config) ->
                 breakpoints := [
                     #{
                         verified := false,
-                        message := ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}",
+                        message :=
+                            ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}; `Module.function/arity`",
                         reason := ~"failed"
                     },
                     #{verified := true}

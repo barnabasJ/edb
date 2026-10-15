@@ -123,8 +123,8 @@ eval(Opts0 = #{context := _}) ->
     #{function := #{function := Fun, deps := Deps}} = Opts0,
     Opts1 =
         Opts0#{
-            function := Fun,
-            dependencies => Deps,
+            function := language_callback(Fun),
+            dependencies => [edb_dap_language_elixir | Deps],
             max_term_size => maps:get(max_term_size, Opts0, 1_000_000_000),
             timeout => maps:get(timeout, Opts0, 5_000)
         },
@@ -132,8 +132,8 @@ eval(Opts0 = #{context := _}) ->
 eval(Opts0) ->
     #{function := #{function := Fun, deps := Deps}} = Opts0,
     Opts1 = #{
-        function => fun() -> Fun(#{}) end,
-        dependencies => Deps,
+        function => global_language_callback(Fun),
+        dependencies => [edb_dap_language_elixir | Deps],
         timeout => maps:get(timeout, Opts0, 5_000)
     },
     edb:eval(Opts1).
@@ -167,11 +167,11 @@ locals_scope(Vars) ->
         type => locals,
         variables => [
             #{
-                name => Name,
+                name => DisplayName,
                 value_rep => value_rep(Value),
                 structure => structure(Value, access_local(Name))
             }
-         || Name := Value <- Vars
+         || {DisplayName, Name, Value} <- visible_variables(Vars)
         ]
     }.
 
@@ -183,7 +183,7 @@ access_local(Name) ->
             #{Name := {value, Value}} -> Value
         end
     end,
-    EvalName = Name,
+    EvalName = variable_name(Name),
     {Accessor, EvalName}.
 
 -spec registers_scope(StackFrameVars) -> scope() when
@@ -286,8 +286,16 @@ access_process_info(Pid, Types) when is_list(Types) ->
             Values -> maps:from_list(Values)
         end
     end,
-    EvalName = format("maps:from_list(erlang:process_info(erlang:list_to_pid(\"~p\"), ~w))", [Pid, Types]),
-    {Accessor, EvalName};
+    {Accessor,
+        case get(edb_language) of
+            elixir ->
+                format(":maps.from_list(:erlang.process_info(:erlang.list_to_pid(~s), ~s))", [
+                    edb_dap_language_elixir:inspect(pid_to_list(Pid), infinity),
+                    edb_dap_language_elixir:inspect(Types, infinity)
+                ]);
+            _ ->
+                format("maps:from_list(erlang:process_info(erlang:list_to_pid(\"~p\"), ~w))", [Pid, Types])
+        end};
 access_process_info(Pid, Type) when is_atom(Type) ->
     Accessor = fun(_) ->
         case erlang:process_info(Pid, Type) of
@@ -301,7 +309,20 @@ access_process_info(Pid, Type) when is_atom(Type) ->
         end
     end,
     EvalName = format("erlang:element(2, erlang:process_info(erlang:list_to_pid(\"~p\"), ~p))", [Pid, Type]),
-    {Accessor, EvalName}.
+    {Accessor,
+        case get(edb_language) of
+            elixir ->
+                ElixirExpr = format(":erlang.element(2, :erlang.process_info(:erlang.list_to_pid(~s), ~s))", [
+                    edb_dap_language_elixir:inspect(pid_to_list(Pid), infinity),
+                    edb_dap_language_elixir:inspect(Type, infinity)
+                ]),
+                case Type of
+                    dictionary -> format(":maps.from_list(~s)", [ElixirExpr]);
+                    _ -> ElixirExpr
+                end;
+            _ ->
+                EvalName
+        end}.
 
 % -----------------------------------------------------------------------------
 % Callback for the "variables" request
@@ -338,7 +359,7 @@ list_structure(List, Accessor, EvalName, Window = #{start := Start}) ->
         fun
             ({Index, Value}) ->
                 Step = fun(L) -> lists:nth(Index, L) end,
-                StepStr = fun(E) -> format("lists:nth(~b, ~s)", [Index, E]) end,
+                StepStr = fun(E) -> expression("lists:nth(~b, ~s)", ":lists.nth(~b, (~s))", [Index, E]) end,
                 #{
                     name => integer_to_binary(Index),
                     value_rep => value_rep({value, Value}),
@@ -346,7 +367,9 @@ list_structure(List, Accessor, EvalName, Window = #{start := Start}) ->
                 };
             ({improper_tail, TailIndex, TailValue}) ->
                 Step = fun(L) -> tl(lists:nthtail(TailIndex - 2, L)) end,
-                StepStr = fun(E) -> format("tl(lists:nthtail(~b, ~s))", [TailIndex - 2, E]) end,
+                StepStr = fun(E) ->
+                    expression("tl(lists:nthtail(~b, ~s))", "tl(:lists.nthtail(~b, (~s)))", [TailIndex - 2, E])
+                end,
                 #{
                     name => ~"|",
                     value_rep => value_rep({value, TailValue}),
@@ -392,7 +415,7 @@ tuple_structure(Tuple, Accessor, EvalName, Window) ->
      || Index <- Indices,
         Value <- [erlang:element(Index, Tuple)],
         Step <- [fun(T) -> erlang:element(Index, T) end],
-        StepStr <- [fun(E) -> format("erlang:element(~b, ~s)", [Index, E]) end]
+        StepStr <- [fun(E) -> expression("erlang:element(~b, ~s)", ":erlang.element(~b, (~s))", [Index, E]) end]
     ].
 
 -spec map_structure(Map, Accessor, EvalName, Window) -> [variable()] when
@@ -410,7 +433,7 @@ map_structure(Map, Accessor, EvalName, #{start := Start, count := Count}) ->
         }
      || {Key, Value} <- Slice,
         Step <- [fun(M) -> maps:get(Key, M) end],
-        StepStr <- [fun(E) -> format("maps:get(~p, ~s)", [Key, E]) end]
+        StepStr <- [fun(E) -> map_access_expression(Key, E) end]
     ].
 
 -spec slice_map_iterator(Iterator, Start, Len) -> Slice when
@@ -440,7 +463,11 @@ slice_map_iterator(Iterator0, 1, Count) when is_integer(Count) ->
 fun_structure(Fun, Accessor, EvalName) ->
     FunInfo = maps:from_list(erlang:fun_info(Fun)),
     EnvStep = fun(_) -> maps:get(env, FunInfo) end,
-    EnvStepStr = fun(E) -> format("erlang:element(2, erlang:fun_info(~s, env))", [E]) end,
+    EnvStepStr = fun(E) ->
+        expression("erlang:element(2, erlang:fun_info(~s, env))", ":erlang.element(2, :erlang.fun_info((~s), :env))", [
+            E
+        ])
+    end,
     [
         #{
             name => ~"fun",
@@ -501,17 +528,23 @@ extend_accessor(Accessor, EvalName, Step, StepStr) ->
 % -----------------------------------------------------------------------------
 -spec evaluate_callback(Expr, CompiledExpr, Fmt) -> callback(evaluation_result()) when
     Expr :: binary(),
-    CompiledExpr :: edb_expr:compiled_expr(),
+    CompiledExpr :: edb_expr:compiled_expr() | #{language := elixir, expression := binary()},
     Fmt :: format_full | format_short.
 evaluate_callback(Expr, CompiledExpr, Fmt) ->
-    Eval = edb_expr:entrypoint(CompiledExpr),
+    {Eval, Deps} =
+        case CompiledExpr of
+            #{language := elixir, expression := Expression} ->
+                {fun(Vars) -> edb_dap_language_elixir:evaluate(Expression, Vars) end, []};
+            _ ->
+                {edb_expr:entrypoint(CompiledExpr), [maps:get(module, CompiledExpr)]}
+        end,
     Format =
         case Fmt of
             format_full -> fun value_full/1;
             format_short -> fun value_rep/1
         end,
     #{
-        deps => [maps:get(module, CompiledExpr)],
+        deps => Deps,
         function =>
             fun(StackFrameVars) ->
                 try Eval(StackFrameVars) of
@@ -588,14 +621,20 @@ safe_take([H | Tail], _) -> [H | Tail].
 -spec value_rep(Val) -> binary() when
     Val :: edb:value().
 value_rep({value, Value}) ->
-    format("~0kP", [Value, 5]);
+    case get(edb_language) of
+        elixir -> edb_dap_language_elixir:inspect(Value, 5);
+        _ -> format("~0kP", [Value, 5])
+    end;
 value_rep({too_large, Size, Max}) ->
     format("Too Large (~p vs ~p)", [Size, Max]).
 
 -spec value_full(Val) -> binary() when
     Val :: {value, term()}.
 value_full({value, Value}) ->
-    format("~0kp", [Value]).
+    case get(edb_language) of
+        elixir -> edb_dap_language_elixir:inspect(Value, infinity);
+        _ -> format("~0kp", [Value])
+    end.
 
 -spec format_bytes(Bytes :: non_neg_integer()) -> binary().
 format_bytes(Bytes) when Bytes < ?BYTES_PER_KB ->
@@ -663,3 +702,48 @@ structure({value, Val}, {ValAccessor, EvalName}) when is_function(Val) ->
     };
 structure(_, {_ValAccessor, _EvalName}) ->
     none.
+
+-spec language_callback(fun((A) -> B)) -> fun((A) -> B).
+language_callback(Fun) ->
+    Language =
+        case edb_dap_language:implementation() of
+            edb_dap_language_elixir -> elixir;
+            _ -> erlang
+        end,
+    fun(Arg) ->
+        put(edb_language, Language),
+        Fun(Arg)
+    end.
+
+-spec variable_name(binary()) -> binary().
+variable_name(Name) ->
+    case get(edb_language) of
+        elixir -> edb_dap_language_elixir:variable_name(Name);
+        _ -> Name
+    end.
+
+-spec visible_variables(map()) -> [{binary(), binary(), edb:value()}].
+visible_variables(Vars) ->
+    case get(edb_language) of
+        elixir -> edb_dap_language_elixir:visible_variables(Vars);
+        _ -> [{Name, Name, Value} || Name := Value <- Vars]
+    end.
+
+-spec expression(io:format(), io:format(), [term()]) -> binary().
+expression(ErlangFormat, ElixirFormat, Args) ->
+    case get(edb_language) of
+        elixir -> format(ElixirFormat, Args);
+        _ -> format(ErlangFormat, Args)
+    end.
+
+-spec map_access_expression(term(), binary()) -> binary().
+map_access_expression(Key, Expression) ->
+    case get(edb_language) of
+        elixir -> format(":maps.get(~s, (~s))", [edb_dap_language_elixir:inspect(Key, infinity), Expression]);
+        _ -> format("maps:get(~p, ~s)", [Key, Expression])
+    end.
+
+-spec global_language_callback(fun((map()) -> A)) -> fun(() -> A).
+global_language_callback(Fun) ->
+    Wrapped = language_callback(Fun),
+    fun() -> Wrapped(#{}) end.

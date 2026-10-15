@@ -25,7 +25,7 @@ Language-specific hooks for the DAP adapter.
 -behaviour(gen_server).
 
 -export([start_link/0]).
--export([source_to_modules/2]).
+-export([source_to_modules/2, configure/1, implementation/0]).
 
 -export([
     init/1,
@@ -72,6 +72,14 @@ is shown to the DAP client.
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+-spec configure(erlang | elixir) -> ok.
+configure(Language) ->
+    gen_server:call(?SERVER, {configure, Language}).
+
+-spec implementation() -> module().
+implementation() ->
+    gen_server:call(?SERVER, implementation).
+
 -spec source_to_modules(Path, Lines) -> source_to_modules_result() when
     Path :: binary(),
     Lines :: [edb:line()].
@@ -83,6 +91,15 @@ init([]) ->
     {ok, init_state()}.
 
 -spec handle_call(term(), term(), server_state()) -> {reply, term(), server_state()}.
+handle_call({configure, Language}, _From, _State) ->
+    Impl =
+        case Language of
+            erlang -> edb_dap_language_erlang;
+            elixir -> edb_dap_language_elixir
+        end,
+    {reply, ok, #{impl => Impl, callback_state => Impl:init()}};
+handle_call(implementation, _From, State = #{impl := Impl}) ->
+    {reply, Impl, State};
 handle_call({source_to_modules, Path, Lines}, _From, State0 = #{impl := Impl, callback_state := CallbackState0}) ->
     case Impl:source_to_modules(Path, Lines, CallbackState0) of
         {ok, Modules, CallbackState1} ->

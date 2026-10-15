@@ -1,6 +1,6 @@
 # edb
 
-A modern step-debugger for Erlang. When a process hits a breakpoint, `edb` freezes the whole node so you can inspect every process running inside it. It is IDE agnostic and works with any IDE that [implements the Debugger Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/implementors/tools/).
+A modern step-debugger for Erlang and Elixir. When a process hits a breakpoint, `edb` freezes the whole node so you can inspect every process running inside it. It is IDE agnostic and works with any IDE that [implements the Debugger Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/implementors/tools/).
 
 Building `edb` from source requires OTP 29 or later. Prebuilt releases also support OTP 28 by including a separately built compatible escript. For more technical details, see our [paper](https://dl.acm.org/doi/pdf/10.1145/3759161.3763047) in the Erlang 2025 Workshop.
 
@@ -73,6 +73,11 @@ Create `.vscode/launch.json` in your project. The example below covers the two c
 ```
 
 Set a breakpoint, pick a configuration from the **Run and Debug** view, and press F5.
+
+## Elixir and Mix
+
+For Mix compiler setup, launch/attach configurations, and Elixir expressions, see
+the [Elixir guide](docs/ELIXIR.md). The integration requires OTP 29 or later.
 
 ## Using edb from other IDEs
 

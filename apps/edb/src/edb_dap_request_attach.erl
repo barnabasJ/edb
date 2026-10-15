@@ -45,6 +45,7 @@ attach requests: https://microsoft.github.io/debug-adapter-protocol/specificatio
 -type arguments() :: #{config := config()}.
 
 -type config() :: #{
+    language => erlang | elixir,
     node := node(),
     cookie => atom(),
     cwd := binary(),
@@ -58,6 +59,7 @@ arguments_template() ->
             node => edb_dap_parse:atom(),
             cookie => {optional, edb_dap_parse:atom()},
             cwd => edb_dap_parse:binary(),
+            language => {optional, edb_dap_parse:atoms([erlang, elixir])},
             stripSourcePrefix => {optional, edb_dap_parse:binary()}
         }
     }.
@@ -75,10 +77,11 @@ parse_arguments(Args) ->
     Args :: config().
 handle(State0 = #{state := initialized}, Args) ->
     #{config := Config} = Args,
-    AttachArgs = maps:without([cwd, stripSourcePrefix], Config),
+    AttachArgs = maps:without([cwd, stripSourcePrefix, language], Config),
     case edb:attach(AttachArgs) of
         ok ->
             ok = edb:pause(),
+            configure_language(Config),
             Cwd = maps:get(cwd, Config),
             StripSourcePrefix = maps:get(stripSourcePrefix, Config, ~""),
             Node = maps:get(node, Config),
@@ -133,3 +136,10 @@ handle_bootstrap_failure({no_debugger_support, {missing, erl_debugger}}) ->
     );
 handle_bootstrap_failure(Unexpected = {module_injection_failed, _Module, _Reason}) ->
     throw(Unexpected).
+
+-spec configure_language(config()) -> ok.
+configure_language(Config) ->
+    case Config of
+        #{language := Language} -> edb_dap_language:configure(Language);
+        _ -> ok
+    end.

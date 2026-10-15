@@ -32,11 +32,19 @@ Default Erlang language hooks.
 init() ->
     #{}.
 
--spec source_to_modules(Path, Lines, State) -> {ok, [module()], State} when
+-spec source_to_modules(Path, Lines, State) -> {ok, [module()], State} | {error, binary(), State} when
     Path :: binary(),
     Lines :: [edb:line()],
     State :: state().
-source_to_modules(Path, _Lines, State) ->
+source_to_modules(Path, Lines, State) ->
+    case filename:extension(Path) of
+        ~".ex" -> edb_dap_language_elixir:source_to_modules(Path, Lines, State);
+        ~".exs" -> edb_dap_language_elixir:source_to_modules(Path, Lines, State);
+        _ -> erlang_source_to_modules(Path, State)
+    end.
+
+-spec erlang_source_to_modules(binary(), state()) -> {ok, [module()], state()}.
+erlang_source_to_modules(Path, State) ->
     Extension = filename:extension(Path),
     ModuleName = filename:basename(Path, Extension),
     case unicode:characters_to_binary(ModuleName) of

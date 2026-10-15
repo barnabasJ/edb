@@ -132,6 +132,23 @@ set_function_breakpoints(Args) ->
 -spec parse_function_name(Name) -> {ok, mfa()} | {invalid, Name} when
     Name :: binary().
 parse_function_name(Name) ->
+    case
+        re:run(Name, ~"^&?([A-Z][A-Za-z0-9_]*(?:\\.[A-Z][A-Za-z0-9_]*)*)\\.([a-z_][a-zA-Z0-9_!?]*)/([0-9]+)$", [
+            {capture, [1, 2, 3], binary}
+        ])
+    of
+        {match, [Module, Function, ArityBin]} ->
+            Arity = binary_to_integer(ArityBin),
+            case Arity =< 255 of
+                true -> {ok, {binary_to_atom(<<"Elixir.", Module/binary>>), binary_to_atom(Function), Arity}};
+                false -> {invalid, Name}
+            end;
+        nomatch ->
+            parse_erlang_function_name(Name)
+    end.
+
+-spec parse_erlang_function_name(binary()) -> {ok, mfa()} | {invalid, binary()}.
+parse_erlang_function_name(Name) ->
     case unicode:characters_to_list(Name) of
         EncodingError when not is_list(EncodingError) -> {invalid, Name};
         NameStr ->
@@ -183,7 +200,7 @@ parse_mfa(_) ->
 -spec invalid_name_error(Name) -> binary() when
     Name :: binary().
 invalid_name_error(_Name) ->
-    ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}".
+    ~"Not a valid function name. Valid formats: `M:F/A`; `fun M:F/A`; {M, F, A}; `Module.function/arity`".
 
 -spec format_function_breakpoint_error(Error) -> binary() when
     Error :: edb:add_function_breakpoint_error().
