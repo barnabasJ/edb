@@ -43,11 +43,26 @@ defmodule Edb.TestTaskTest do
     refute output =~ "you must pass return_diagnostics"
   end
 
-  defp run_fixture(dir, body, top_level \\ "") do
+  test "CLI filters are configured before loading helpers and test files", %{dir: dir} do
+    for {flag, key} <- [{"--include", :include}, {"--exclude", :exclude}, {"--only", :include}] do
+      check = """
+      unless :integration in ExUnit.configuration()[#{inspect(key)}] do
+        raise "#{flag} was configured too late"
+      end
+      """
+
+      File.write!(Path.join(dir, "test/test_helper.exs"), "ExUnit.start()\n" <> check)
+      {output, status} = run_fixture(dir, "assert true", check, [flag, "integration"])
+      assert status == 0, output
+    end
+  end
+
+  defp run_fixture(dir, body, top_level \\ "", args \\ []) do
     File.write!(Path.join(dir, "test/example_test.exs"), """
     #{top_level}
     defmodule FixtureTest do
       use ExUnit.Case
+      @tag :integration
       test "works" do
         #{body}
       end
@@ -63,6 +78,6 @@ defmodule Edb.TestTaskTest do
     mix = System.find_executable("mix")
     {compile_output, status} = System.cmd(mix, ["deps.compile"], options)
     assert status == 0, compile_output
-    System.cmd(mix, ["edb.test", "--warnings-as-errors"], options)
+    System.cmd(mix, ["edb.test", "--warnings-as-errors" | args], options)
   end
 end

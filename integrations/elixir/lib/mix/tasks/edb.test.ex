@@ -55,7 +55,10 @@ defmodule Mix.Tasks.Edb.Test do
     Application.ensure_loaded(:ex_unit)
     Mix.Task.run("app.start", args)
     ExUnit.start(autorun: false)
-    ExUnit.configure(Keyword.take(opts, [:seed, :trace, :max_cases, :max_failures, :timeout]))
+    # Use the same normalization as mix test, before helpers and test modules
+    # can inspect configuration and make compilation-time decisions.
+    {ex_unit_opts, _allowed_files} = Mix.Tasks.Test.process_ex_unit_opts(opts)
+    ExUnit.configure(ex_unit_opts)
 
     directory =
       Path.join(
