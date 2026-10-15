@@ -42,6 +42,9 @@
     test_handles_disconnect_request_via_launch/1,
     test_handles_disconnect_request_via_launch_can_spare_debuggee/1,
     test_terminates_when_node_goes_down/1,
+    test_owned_node_disconnect/1,
+    test_owned_node_exit_status/1,
+    test_owned_node_late_exit/1,
     test_terminates_when_node_goes_down_while_configuring/1
 ]).
 
@@ -71,6 +74,9 @@ groups() ->
             test_handles_disconnect_request_via_launch,
             test_handles_disconnect_request_via_launch_can_spare_debuggee,
             test_terminates_when_node_goes_down,
+            test_owned_node_disconnect,
+            test_owned_node_exit_status,
+            test_owned_node_late_exit,
             test_terminates_when_node_goes_down_while_configuring
         ]}
     ].
@@ -263,9 +269,105 @@ test_terminates_when_node_goes_down_while_configuring(Config) ->
 
     ok.
 
+test_owned_node_disconnect(Config) ->
+    {ok, Client, _Node} = edb_dap_test_support:start_session_via_launch_run(Config, #{}),
+    ok = edb_dap_test_support:configure(Client, []),
+    #{success := true, body := #{result := PidBinary}} = edb_dap_test_client:evaluate(Client, #{
+        expression => ~"list_to_integer(os:getpid())"
+    }),
+    Pid = binary_to_integer(PidBinary),
+    try
+        #{success := true} = edb_dap_test_client:evaluate(Client, #{
+            expression =>
+                ~"spawn(fun() -> timer:sleep(50), lists:foreach(fun erlang:disconnect_node/1, nodes(connected)) end), ok"
+        }),
+        {ok, [#{event := ~"terminated"}]} = edb_dap_test_client:wait_for_event(~"terminated", Client),
+        ?assert(os_process_alive(Pid)),
+        ?assertMatch(
+            #{success := false, body := #{error := #{id := ?ERROR_PRECONDITION_VIOLATION}}},
+            edb_dap_test_client:threads(Client)
+        ),
+        #{received := Received} = sys:get_state(Client),
+        ?assertEqual([], maps:get({event, ~"exited"}, Received, [])),
+        #{success := true} = edb_dap_test_client:disconnect(Client, #{}),
+        wait_until_os_process_down(Pid, 5_000)
+    after
+        case os_process_alive(Pid) of
+            true -> os:cmd("kill -9 " ++ integer_to_list(Pid));
+            false -> ok
+        end
+    end.
+
+test_owned_node_exit_status(Config) ->
+    {ok, Client, _Node} = edb_dap_test_support:start_session_via_launch_run(Config, #{}),
+    ok = edb_dap_test_support:configure(Client, []),
+    #{success := true} = edb_dap_test_client:evaluate(Client, #{
+        expression => ~"spawn(fun() -> timer:sleep(50), halt(2) end), ok"
+    }),
+    {ok, [#{body := #{exitCode := 2}}]} = edb_dap_test_client:wait_for_event(~"exited", Client),
+    {ok, [#{event := ~"terminated"}]} = edb_dap_test_client:wait_for_event(~"terminated", Client),
+    % Allow the grace timer to expire: its stale message must not terminate twice.
+    receive
+    after 1_200 -> ok
+    end,
+    #{received := Received} = sys:get_state(Client),
+    ?assertEqual([], maps:get({event, ~"terminated"}, Received, [])),
+    ?assertEqual([], maps:get({event, ~"exited"}, Received, [])),
+    #{success := true} = edb_dap_test_client:disconnect(Client, #{}).
+
+test_owned_node_late_exit(Config) ->
+    {ok, Client, Node} = edb_dap_test_support:start_session_via_launch_run(Config, #{}),
+    ok = edb_dap_test_support:configure(Client, []),
+    #{success := true} = edb_dap_test_client:evaluate(Client, #{
+        expression =>
+            ~"spawn(fun() -> timer:sleep(50), lists:foreach(fun erlang:disconnect_node/1, nodes(connected)), timer:sleep(1500), halt(2) end), ok"
+    }),
+    {ok, [#{event := ~"terminated"}]} = edb_dap_test_client:wait_for_event(~"terminated", Client),
+    receive
+    after 1_000 -> ok
+    end,
+    #{success := false} = edb_dap_test_client:threads(Client),
+    #{received := Received, io := Port} = sys:get_state(Client),
+    ?assertEqual([], maps:get({event, ~"terminated"}, Received, [])),
+    ?assertEqual([], maps:get({event, ~"exited"}, Received, [])),
+    % Check ownership clearing directly: the transport integration cannot
+    % observe whether the adapter retained a PID after the late exit.
+    {noreply, FinalState} = edb_dap_server:handle_info({Port, {exit_status, 2}}, #{
+        state => terminating,
+        node_down => make_ref(),
+        node => Node,
+        port => Port,
+        type => #{request => launch, process_id => 1}
+    }),
+    ?assertEqual(#{state => terminating}, FinalState),
+    #{success := true} = edb_dap_test_client:disconnect(Client, #{}).
+
 %%--------------------------------------------------------------------
 %% Helpers
 %%--------------------------------------------------------------------
+
+-spec os_process_alive(pos_integer()) -> boolean().
+os_process_alive(Pid) ->
+    Port = open_port({spawn_executable, os:find_executable("kill")}, [
+        exit_status, stderr_to_stdout, {args, ["-0", integer_to_list(Pid)]}
+    ]),
+    receive
+        {Port, {exit_status, Status}} -> Status =:= 0
+    end.
+
+-spec wait_until_os_process_down(pos_integer(), non_neg_integer()) -> ok.
+wait_until_os_process_down(Pid, Timeout) ->
+    case os_process_alive(Pid) of
+        false ->
+            ok;
+        true when Timeout > 0 ->
+            receive
+            after 10 -> ok
+            end,
+            wait_until_os_process_down(Pid, Timeout - 10);
+        true ->
+            error(debuggee_os_process_survived_disconnect)
+    end.
 
 -spec wait_until_down(Peer, Timeout) -> ok when
     Peer :: edb_test_support:peer(),

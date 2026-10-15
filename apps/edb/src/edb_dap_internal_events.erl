@@ -63,10 +63,15 @@ handle_edb_event(Event, _State) ->
 %%% Implementations
 %%%---------------------------------------------------------------------------------
 -spec nodedown_impl(edb_dap_server:state(), Node :: node(), Reason :: term()) -> reaction().
-nodedown_impl(#{node := Node, port := Port}, Node, _Reason) when is_port(Port) ->
+nodedown_impl(#{node := Node, node_down := _}, Node, _Reason) ->
+    #{};
+nodedown_impl(State = #{node := Node, port := Port}, Node, _Reason) when is_port(Port) ->
     % For an owned process, the port exit status is authoritative. Distribution
     % commonly closes before the OS process exits, including on test failures.
-    #{};
+    % A distribution disconnect does not imply OS process exit. Bound the wait
+    % and retain ownership information so a later disconnect can clean it up.
+    Timer = erlang:start_timer(1_000, self(), {debuggee_nodedown, Node}),
+    #{new_state => State#{node_down => Timer}};
 nodedown_impl(#{node := Node}, Node, Reason) ->
     ExitCode =
         case Reason of

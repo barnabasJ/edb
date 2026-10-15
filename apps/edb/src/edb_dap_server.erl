@@ -90,6 +90,7 @@ For details, see https://microsoft.github.io/debug-adapter-protocol/specificatio
         % waiting for the client to send all the initial configuration
         % requests (setBreakpoints, etc)
         state := configuring,
+        node_down => reference(),
         type := attach_type(),
         client_info := client_info(),
         port := port() | none,
@@ -101,6 +102,7 @@ For details, see https://microsoft.github.io/debug-adapter-protocol/specificatio
     | #{
         % We are attached to the debuggee node, and debugging is in progress
         state := attached,
+        node_down => reference(),
         type := attach_type(),
         client_info := client_info(),
         port := port() | none,
@@ -111,7 +113,11 @@ For details, see https://microsoft.github.io/debug-adapter-protocol/specificatio
     }
     | #{
         % We are shutting down
-        state := terminating
+        state := terminating,
+        node_down => reference(),
+        node => node(),
+        port => port() | none,
+        type => attach_type()
     }.
 
 -type action() ::
@@ -190,12 +196,14 @@ handle_call(_Request, _From, State) ->
     {noreply, State}.
 
 -spec handle_cast(cast_request(), state()) -> {noreply, state()} | {stop, normal, state()}.
-handle_cast({handle_message, Request = #{type := request}}, State0) ->
-    Reaction0 = ?REACTING_TO_UNEXPECTED_ERRORS(
-        fun edb_dap_request:dispatch/2,
-        Request,
-        State0
-    ),
+handle_cast({handle_message, Request = #{type := request, command := Command}}, State0) ->
+    Reaction0 =
+        case State0 of
+            #{node_down := _} when Command =/= ~"disconnect" ->
+                edb_dap_request:precondition_violation(~"The debuggee node disconnected");
+            _ ->
+                ?REACTING_TO_UNEXPECTED_ERRORS(fun edb_dap_request:dispatch/2, Request, State0)
+        end,
 
     RequestContext = maps:with([command, seq], Request),
     Reaction1 = Reaction0#{request_context => RequestContext},
@@ -214,16 +222,30 @@ handle_cast(terminate, State) ->
     {stop, normal, State}.
 
 -spec handle_info(Event, state()) -> {noreply, state()} when
-    Event :: edb:event_envelope(edb:event()) | {port(), debuggee_port_event()}.
+    Event :: info_event().
 handle_info(Event, State0) ->
     Reaction = ?REACTING_TO_UNEXPECTED_ERRORS(fun handle_info_impl/2, Event, State0),
     State1 = react(Reaction, State0),
     {noreply, State1}.
 
 -spec handle_info_impl(Event, state()) -> reaction() when
-    Event :: edb:event_envelope(edb:event()) | {port(), debuggee_port_event()}.
+    Event :: info_event().
 handle_info_impl(Event = {edb_event, _, _}, State) ->
     handle_edb_event(Event, State);
+handle_info_impl({timeout, Timer, {debuggee_nodedown, Node}}, State = #{node_down := Timer, node := Node}) ->
+    #{
+        new_state => State#{state := terminating},
+        actions => [
+            {event,
+                edb_dap_event:output(#{
+                    output => ~"The debuggee node disconnected while its OS process is still running\n",
+                    category => console
+                })},
+            {event, edb_dap_event:terminated()}
+        ]
+    };
+handle_info_impl({timeout, _Timer, {debuggee_nodedown, _Node}}, _State) ->
+    #{};
 handle_info_impl({Port, PortEvent}, State = #{port := Port}) when is_port(Port) ->
     handle_debuggee_port_event(PortEvent, State);
 handle_info_impl(Unexpected, _State) ->
@@ -243,6 +265,11 @@ handle_edb_event(UnexpectedEvent, State0) ->
 -type debuggee_port_event() ::
     {data, binary()}
     | {exit_status, integer()}.
+
+-type info_event() ::
+    edb:event_envelope(edb:event())
+    | {port(), debuggee_port_event()}
+    | {timeout, reference(), {debuggee_nodedown, node()}}.
 
 -spec handle_debuggee_port_event(Event, state()) -> reaction() when
     Event :: debuggee_port_event().
@@ -265,7 +292,9 @@ handle_debuggee_port_event({exit_status, Status}, #{state := launching}) ->
         ]
     };
 handle_debuggee_port_event({exit_status, _Status}, #{state := terminating}) ->
-    #{};
+    % A process may exit after the distribution grace period. Drop ownership
+    % now so a later disconnect cannot attempt to kill a reused OS PID.
+    #{new_state => #{state => terminating}};
 handle_debuggee_port_event({exit_status, Status}, _State) ->
     #{
         new_state => #{state => terminating},

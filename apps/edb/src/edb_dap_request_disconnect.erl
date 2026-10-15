@@ -106,6 +106,7 @@ handle(State, Args) ->
     none
     | #{
         node := node(),
+        node_down => reference(),
         process_id := integer(),
         shell_process_id => integer(),
         port => port() | none
@@ -124,9 +125,9 @@ shouldTerminateDebuggee(_, _) ->
 -spec get_victims(State) -> Victims when
     State :: edb_dap_server:state(),
     Victims :: victims().
-get_victims(#{node := Node, type := AttachType, port := Port}) ->
+get_victims(State = #{node := Node, type := AttachType, port := Port}) ->
     Victims0 = maps:with([process_id, shell_process_id], AttachType),
-    Victims1 = Victims0#{node => Node, port => Port},
+    Victims1 = maps:merge(Victims0#{node => Node, port => Port}, maps:with([node_down], State)),
     Victims1;
 get_victims(_State) ->
     none.
@@ -137,7 +138,13 @@ kill_victims(none) ->
     ok;
 kill_victims(Victims = #{node := Node, process_id := ProcessId}) ->
     KillReqTimeout = 5,
-    case try_async(fun() -> kill_node(Node) end, KillReqTimeout * 1_000) of
+    KillNode = fun() ->
+        case Victims of
+            #{node_down := _} -> kill_os_process(ProcessId, force);
+            _ -> kill_node(Node)
+        end
+    end,
+    case try_async(KillNode, KillReqTimeout * 1_000) of
         ok ->
             ok;
         timeout ->
