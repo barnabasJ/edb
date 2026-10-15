@@ -74,6 +74,89 @@ defmodule Edb.CompilerTest do
     assert_raise Mix.Error, ~r/no debug info/, fn -> Mix.Tasks.Compile.Edb.instrument(path) end
   end
 
+  test "instrumentation does not rerun on_load and takes effect on the next load", %{dir: dir} do
+    calls = Path.join(dir, "on_load_calls")
+
+    [{module, binary}] =
+      Code.compile_string("""
+      defmodule Edb.OnLoadFixture do
+        @on_load :initialize
+        def initialize, do: File.write!(#{inspect(calls)}, "loaded\n", [:append])
+        def value, do: 42
+      end
+      """)
+
+    on_exit(fn -> unload(module) end)
+    original_md5 = module.module_info(:md5)
+    path = Path.join(dir, "#{module}.beam")
+    File.write!(path, binary)
+
+    assert :ok == Mix.Tasks.Compile.Edb.instrument(path)
+    assert File.read!(calls) == "loaded\n"
+    assert module.module_info(:md5) == original_md5
+    assert apply(module, :value, []) == 42
+    assert :noop == Mix.Tasks.Compile.Edb.instrument(path)
+
+    unload(module)
+    assert {:module, ^module} = :code.load_abs(String.to_charlist(Path.rootname(path)))
+    assert File.read!(calls) == "loaded\nloaded\n"
+    assert module.module_info(:md5) != original_md5
+    assert [_ | _] = :code.get_debug_info(module)
+    assert apply(module, :value, []) == 42
+  end
+
+  test "instrumentation preserves a loaded NIF without an upgrade callback", %{dir: dir} do
+    nif_path = Path.join(dir, "fixture_nif")
+    source = nif_path <> ".c"
+
+    File.write!(source, """
+    #include "erl_nif.h"
+    static ERL_NIF_TERM value(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+      return enif_make_int(env, 42);
+    }
+    static ErlNifFunc functions[] = {{"value", 0, value, 0}};
+    ERL_NIF_INIT(Elixir.Edb.NifFixture, functions, NULL, NULL, NULL, NULL)
+    """)
+
+    include = Path.join([List.to_string(:code.root_dir()), "usr", "include"])
+
+    platform_flags =
+      if match?({:unix, :darwin}, :os.type()), do: ["-undefined", "dynamic_lookup"], else: []
+
+    {output, status} =
+      System.cmd(
+        "cc",
+        ["-shared", "-fPIC", "-I", include, "-o", nif_path <> ".so", source] ++ platform_flags,
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, output
+
+    [{module, binary}] =
+      Code.compile_string("""
+      defmodule Edb.NifFixture do
+        @on_load :initialize
+        def initialize, do: :erlang.load_nif(#{inspect(String.to_charlist(nif_path))}, 0)
+        def value, do: :erlang.nif_error(:not_loaded)
+      end
+      """)
+
+    on_exit(fn -> unload(module) end)
+    assert apply(module, :value, []) == 42
+    original_md5 = module.module_info(:md5)
+    path = Path.join(dir, "#{module}.beam")
+    File.write!(path, binary)
+
+    assert :ok == Mix.Tasks.Compile.Edb.instrument(path)
+    assert module.module_info(:md5) == original_md5
+    assert apply(module, :value, []) == 42
+
+    unload(module)
+    assert {:module, ^module} = :code.load_abs(String.to_charlist(Path.rootname(path)))
+    assert [_ | _] = :code.get_debug_info(module)
+    assert apply(module, :value, []) == 42
+  end
+
   test "pipeline instrumentation preserves effects, branches, guards and tail calls", %{dir: dir} do
     source = """
     defmodule Edb.PipelineSemantics do
@@ -146,5 +229,11 @@ defmodule Edb.CompilerTest do
     assert :noop == Mix.Tasks.Compile.Edb.instrument(path)
     assert apply(module, :run, [true]) == before
     Process.delete(:edb_pipeline_events)
+  end
+
+  defp unload(module) do
+    :code.purge(module)
+    :code.delete(module)
+    :code.purge(module)
   end
 end

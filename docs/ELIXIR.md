@@ -37,6 +37,13 @@ debug metadata, documentation and checker information. Unchanged BEAM files
 are skipped on later compilations. Instrumentation increases stack usage; keep
 it in development and test builds.
 
+Modules with `@on_load` callbacks, including NIF loaders, are instrumented on disk
+but keep their current loaded code until the next ordinary load. This avoids
+repeating initialization or attempting an unsupported NIF upgrade during
+compilation. After compiling them, restart the application to debug their Elixir
+functions. An `@on_load` module defined in a test script retains its original code
+for that test run; breakpoints in that module are unavailable in that run.
+
 ## Launch from an IDE
 
 Configure your DAP client to start the edb executable with argument `dap`.

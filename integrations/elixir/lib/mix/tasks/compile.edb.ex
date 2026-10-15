@@ -90,8 +90,13 @@ defmodule Mix.Tasks.Compile.Edb do
     case :compile.forms(Edb.PipelineSteps.rewrite(forms), opts) do
       {:ok, ^module, binary, _warnings} ->
         File.write!(path, binary)
-        # Mix may have already loaded the module during compilation.
-        if :code.is_loaded(module) != false do
+        # Mix may have already loaded the module during compilation. Reloading
+        # on_load modules repeats initialization and can fail for NIF libraries
+        # without an upgrade callback. Leave their current code intact; the
+        # instrumented BEAM takes effect on the next ordinary load.
+        on_load? = Enum.any?(forms, &match?({:attribute, _, :on_load, _}, &1))
+
+        if :code.is_loaded(module) != false and not on_load? do
           unless :code.soft_purge(module), do: Mix.raise("Old code for #{module} is still in use")
           {:module, ^module} = :code.load_binary(module, String.to_charlist(path), binary)
         end
