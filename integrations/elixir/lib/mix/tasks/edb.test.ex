@@ -67,6 +67,9 @@ defmodule Mix.Tasks.Edb.Test do
 
     {opts, paths} = OptionParser.parse!(args, strict: @switches, aliases: [n: :name_pattern])
     Application.ensure_loaded(:ex_unit)
+    # Like mix test, apply --warnings-as-errors to tests, while allowing
+    # application compilation warnings. app.start reuses this compile result.
+    Mix.Task.run("compile", args -- ["--warnings-as-errors"])
     Mix.Task.run("app.start", args)
     ExUnit.start(autorun: false)
     # Use the same normalization as mix test, before helpers and test modules

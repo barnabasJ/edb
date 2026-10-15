@@ -49,6 +49,26 @@ defmodule Edb.TestTaskTest do
     refute output =~ "you must pass return_diagnostics"
   end
 
+  test "application warnings are allowed on cold builds like mix test", %{dir: dir} do
+    File.mkdir_p!(Path.join(dir, "lib"))
+
+    File.write!(Path.join(dir, "lib/example.ex"), """
+    defmodule Fixture.ApplicationWarning do
+      def value do
+        unused_application_value = 1
+        :ok
+      end
+    end
+    """)
+
+    for task <- ["test", "edb.test"] do
+      {output, status} = run_fixture(dir, "assert true", "", [], task)
+      assert output =~ "unused_application_value"
+      assert status == 0, output
+      assert output =~ "Result: 1 passed"
+    end
+  end
+
   test "runtime warnings still fail preparation with warnings-as-errors", %{dir: dir} do
     {output, status} = run_fixture(dir, "assert true", "IO.warn(\"fixture runtime warning\")")
     assert status != 0
@@ -109,7 +129,7 @@ defmodule Edb.TestTaskTest do
     assert output =~ "excluded"
   end
 
-  defp run_fixture(dir, body, top_level \\ "", args \\ []) do
+  defp run_fixture(dir, body, top_level \\ "", args \\ [], task \\ "edb.test") do
     File.write!(Path.join(dir, "test/example_test.exs"), """
     #{top_level}
     defmodule FixtureTest do
@@ -124,12 +144,16 @@ defmodule Edb.TestTaskTest do
     options = [
       cd: dir,
       stderr_to_stdout: true,
-      env: [{"MIX_ENV", "test"}, {"EDB_DAP_DEBUGGEE_INIT", "ok"}]
+      env: [
+        {"MIX_ENV", "test"},
+        {"MIX_BUILD_PATH", Path.join([dir, "_build", task])},
+        {"EDB_DAP_DEBUGGEE_INIT", "ok"}
+      ]
     ]
 
     mix = System.find_executable("mix")
     {compile_output, status} = System.cmd(mix, ["deps.compile"], options)
     assert status == 0, compile_output
-    System.cmd(mix, ["edb.test", "--warnings-as-errors" | args], options)
+    System.cmd(mix, [task, "--warnings-as-errors" | args], options)
   end
 end
