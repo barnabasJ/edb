@@ -147,6 +147,7 @@ A function-breakpoint may not be added for various reasons:
     | current_fun
     | current_loc
     | exclusion_reasons
+    | label
     | message_queue_len
     | parent
     | pid_string
@@ -159,6 +160,7 @@ A function-breakpoint may not be added for various reasons:
     current_fun => mfa(),
     current_loc => {string(), line()},
     exclusion_reasons => [exclusion_reason()],
+    label => term(),
     message_queue_len => non_neg_integer(),
     parent => atom() | pid(),
     pid_string => binary(),

@@ -123,6 +123,7 @@ process_info(Pid, Fields) ->
         current_fun => boolean(),
         current_loc => boolean(),
         exclusion_reasons => [edb:exclusion_reason()],
+        label => boolean(),
         message_queue_len => boolean(),
         parent => boolean(),
         pid_string => boolean(),
@@ -159,6 +160,8 @@ make_process_info_fields([exclusion_reasons | Rest], RawStatus, ExclusionReasons
             Reasons -> Acc0#{exclusion_reasons => Reasons}
         end,
     make_process_info_fields(Rest, RawStatus, ExclusionReasons, Acc1);
+make_process_info_fields([label | Rest], RawStatus, ExclusionReasons, Acc0) ->
+    make_process_info_fields(Rest, RawStatus, ExclusionReasons, Acc0#{label => true});
 make_process_info_fields([message_queue_len | Rest], RawStatus, ExclusionReasons, Acc0) ->
     Acc1 = Acc0#{message_queue_len => true},
     make_process_info_fields(Rest, RawStatus, ExclusionReasons, Acc1);
@@ -242,6 +245,7 @@ add_process_info_1(Info, Fields) ->
         application
         | current_fun
         | current_loc
+        | label
         | message_queue_len
         | parent
         | pid_string
@@ -256,6 +260,8 @@ required_process_info_items([current_fun | Rest], Acc) ->
     required_process_info_items(Rest, [current_location | Acc]);
 required_process_info_items([current_loc | Rest], Acc) ->
     required_process_info_items(Rest, [current_location | Acc]);
+required_process_info_items([label | Rest], Acc) ->
+    required_process_info_items(Rest, Acc);
 required_process_info_items([message_queue_len | Rest], Acc) ->
     required_process_info_items(Rest, [message_queue_len | Acc]);
 required_process_info_items([parent | Rest], Acc) ->
@@ -297,7 +303,17 @@ add_process_info_2(Pid, Info0, ErlangProcessInfoItems, Fields) ->
                 Info1,
                 RawInfo
             ),
-            {ok, Info2}
+            Info3 =
+                case maps:get(label, Fields, false) of
+                    true ->
+                        case proc_lib:get_label(Pid) of
+                            undefined -> Info2;
+                            Label -> Info2#{label => Label}
+                        end;
+                    false ->
+                        Info2
+                end,
+            {ok, Info3}
     end.
 
 -spec fold_process_info(ProcInfo, Acc, Fields) -> Acc when

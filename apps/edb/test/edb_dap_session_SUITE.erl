@@ -34,6 +34,7 @@
     test_fails_if_not_initialized/1,
     test_fails_if_initialized_twice/1,
     test_fails_if_invalid_launch_config/1,
+    test_thread_labels/1,
 
     %% Shutdown
     test_handles_disconnect_request_via_attach/1,
@@ -52,6 +53,7 @@ suite() ->
 
 all() ->
     [
+        test_thread_labels,
         {group, initialization},
         {group, shutdown}
     ].
@@ -83,6 +85,28 @@ end_per_testcase(_TestCase, _Config) ->
 %%--------------------------------------------------------------------
 %% TEST CASES -- Initialization
 %%--------------------------------------------------------------------
+test_thread_labels(Config) ->
+    {ok, Client, #{peer := Peer, modules := #{labeled_worker := Source}}} =
+        edb_dap_test_support:start_session_via_launch(Config, #{
+            modules => [
+                {source, [
+                    ~"-module(labeled_worker).\n",
+                    ~"-export([go/0]).\n",
+                    ~"go() ->\n",
+                    ~"    register(labeled_worker, self()),\n",
+                    ~"    proc_lib:set_label({worker, 42}),\n",
+                    ~"    receive done -> ok end.\n"
+                ]}
+            ]
+        }),
+    ok = edb_dap_test_support:configure(Client, [{Source, [{line, 6}]}]),
+    {ok, ThreadId, _} = edb_dap_test_support:spawn_and_wait_for_bp(Client, Peer, {labeled_worker, go, []}),
+    #{success := true, body := #{threads := Threads}} = edb_dap_test_client:threads(Client),
+    [Name] = [N || #{id := Id, name := N} <- Threads, Id =:= ThreadId],
+    ?assertNotEqual(nomatch, binary:match(Name, ~"(labeled_worker)")),
+    ?assertNotEqual(nomatch, binary:match(Name, ~"({worker,42})")),
+    ok.
+
 test_fails_if_not_initialized(Config) ->
     {ok, Client} = edb_dap_test_support:start_test_client(Config),
 

@@ -257,6 +257,9 @@ test_mix_exunit_launch(Config) ->
         #{success := true} = edb_dap_test_client:continue(Client, #{threadId => Thread}),
         {ok, Thread2, [#{id := Frame, name := ~"EdbRuntimeTest.test selected/1", line := 8} | _]} =
             edb_dap_test_support:wait_for_bp(Client),
+        #{success := true, body := #{threads := Threads}} = edb_dap_test_client:threads(Client),
+        [ThreadName] = [Name || #{id := Id, name := Name} <- Threads, Id =:= Thread2],
+        ?assertNotEqual(nomatch, binary:match(ThreadName, ~"EdbRuntimeTest: test selected")),
         ?assertMatch(
             #{success := true, body := #{result := ~"42"}},
             edb_dap_test_client:evaluate(Client, #{frameId => Frame, expression => ~"value + 2"})

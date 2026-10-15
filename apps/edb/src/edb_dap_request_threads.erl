@@ -59,7 +59,7 @@ parse_arguments(Args) ->
     State :: edb_dap_server:state(),
     Args :: arguments().
 handle(#{state := attached}, _Args) ->
-    ProcessesInfo = edb:processes([message_queue_len, pid_string, registered_name]),
+    ProcessesInfo = edb:processes([message_queue_len, pid_string, registered_name, label]),
     ThreadIds = edb_dap_id_mappings:pids_to_thread_ids(maps:keys(ProcessesInfo)),
     Threads = [thread(Pid, ThreadIds, Info) || Pid := Info <- maps:iterator(ProcessesInfo, ordered)],
     #{response => edb_dap_request:success(#{threads => Threads})};
@@ -83,8 +83,24 @@ thread(Pid, ThreadIds, Info) ->
 -spec thread_name(edb:process_info()) -> binary().
 thread_name(Info) ->
     ProcessNameLabel = process_name_label(Info),
+    Label =
+        case maps:find(label, Info) of
+            error -> [];
+            {ok, Value} -> [~" (", format_label(Value), ~")"]
+        end,
     MessageQueueLenLabel = message_queue_len_label(Info),
-    iolist_to_binary([ProcessNameLabel, MessageQueueLenLabel]).
+    iolist_to_binary([ProcessNameLabel, Label, MessageQueueLenLabel]).
+
+-spec format_label(term()) -> binary().
+format_label({Module, Test}) when is_atom(Module), is_atom(Test) ->
+    case {atom_to_binary(Module), atom_to_binary(Test)} of
+        {<<"Elixir.", Name/binary>>, <<"test ", _/binary>> = TestName} ->
+            <<Name/binary, ": ", TestName/binary>>;
+        _ ->
+            unicode:characters_to_binary(io_lib:format("~tp", [{Module, Test}]))
+    end;
+format_label(Label) ->
+    unicode:characters_to_binary(io_lib:format("~tp", [Label])).
 
 -spec process_name_label(edb:process_info()) -> iodata().
 process_name_label(Info = #{pid_string := PidString}) ->
