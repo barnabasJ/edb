@@ -155,7 +155,7 @@ handle(_UnexpectedState, _) ->
 %% ------------------------------------------------------------------
 -spec stack_frame(edb_dap_server:state(), pid(), edb:stack_frame()) -> stack_frame().
 stack_frame(State, Pid, #{id := Id, mfa := {M, F, A}, source := FilePath, line := Location}) ->
-    Name = edb_dap_language_elixir:format_mfa({M, F, A}),
+    Name = edb_dap_language:format_mfa({M, F, A}),
     Line =
         case Location of
             undefined -> 0;

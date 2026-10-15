@@ -26,6 +26,7 @@ Language-specific hooks for the DAP adapter.
 
 -export([start_link/0]).
 -export([source_to_modules/2, configure/1, implementation/0]).
+-export([format_mfa/1]).
 
 -export([
     init/1,
@@ -71,6 +72,19 @@ is shown to the DAP client.
 -spec start_link() -> gen_server:start_ret().
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+-doc """
+Formats frame names by module identity so mixed Erlang/Elixir stacks retain
+their respective notation regardless of the session's expression language.
+""".
+-spec format_mfa(mfa()) -> binary().
+format_mfa({Module, Function, Arity}) ->
+    case atom_to_binary(Module) of
+        <<"Elixir.", Name/binary>> ->
+            iolist_to_binary([Name, ~".", atom_to_binary(Function), ~"/", integer_to_binary(Arity)]);
+        _ ->
+            unicode:characters_to_binary(io_lib:format("~p:~p/~p", [Module, Function, Arity]))
+    end.
 
 -spec configure(erlang | elixir) -> ok.
 configure(Language) ->

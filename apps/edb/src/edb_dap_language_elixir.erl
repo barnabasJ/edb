@@ -21,7 +21,7 @@
 %% Elixir is supplied by the debuggee, not a dependency of the adapter.
 -ignore_xref([{'Elixir.Code', eval_string, 3}, {'Elixir.Kernel', inspect, 2}]).
 -export([init/0, source_to_modules/3]).
--export([find_modules/1, variable_name/1, visible_variables/1, evaluate/2, inspect/2, format_mfa/1]).
+-export([find_modules/1, variable_name/1, visible_variables/1, evaluate/2, inspect/2]).
 
 -spec init() -> #{}.
 init() -> #{}.
@@ -113,12 +113,3 @@ inspect(Value, Limit) ->
             _ -> 4096
         end,
     'Elixir.Kernel':inspect(Value, [{limit, Limit}, {printable_limit, PrintableLimit}, {safe, true}]).
-
--spec format_mfa(mfa()) -> binary().
-format_mfa({Module, Function, Arity}) ->
-    case atom_to_binary(Module) of
-        <<"Elixir.", Name/binary>> ->
-            iolist_to_binary([Name, ~".", atom_to_binary(Function), ~"/", integer_to_binary(Arity)]);
-        _ ->
-            unicode:characters_to_binary(io_lib:format("~p:~p/~p", [Module, Function, Arity]))
-    end.

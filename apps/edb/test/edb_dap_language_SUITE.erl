@@ -26,6 +26,7 @@
 
 %% Test cases
 -export([
+    test_frame_names_in_mixed_language_stacks/1,
     test_set_breakpoints_with_custom_dap_language/1,
     test_set_breakpoints_when_source_maps_to_no_modules/1
 ]).
@@ -37,6 +38,7 @@
 
 all() ->
     [
+        test_frame_names_in_mixed_language_stacks,
         test_set_breakpoints_with_custom_dap_language,
         test_set_breakpoints_when_source_maps_to_no_modules
     ].
@@ -51,6 +53,15 @@ end_per_testcase(_TestCase, _Config) ->
 %%--------------------------------------------------------------------
 %% TEST CASES
 %%--------------------------------------------------------------------
+test_frame_names_in_mixed_language_stacks(_Config) ->
+    ?assertEqual(~"foo:go/2", edb_dap_language:format_mfa({foo, go, 2})),
+    ?assertEqual(~"My.Worker.run/1", edb_dap_language:format_mfa({'Elixir.My.Worker', run, 1})),
+    ?assertEqual(
+        ~"'an erlang module':'quoted function'/0",
+        edb_dap_language:format_mfa({'an erlang module', 'quoted function', 0})
+    ),
+    ok.
+
 test_set_breakpoints_with_custom_dap_language(Config) ->
     {ok, Client, #{peer := Peer}} = start_session_with_custom_dap_language(Config),
 
